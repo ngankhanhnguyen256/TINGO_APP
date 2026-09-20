@@ -63,7 +63,8 @@ import {
   TelegramConfig,
   getTelegramConfig,
   saveTelegramConfig,
-  sendTelegramMessage
+  sendTelegramMessage,
+  notifyCancelOrder
 } from '../../lib/telegram';
 import { formatVietnameseDateTime } from '../../utils/dateFormatter';
 import { sanitizeFirestoreData } from '../../utils/sanitizeFirestore';
@@ -279,6 +280,18 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
     return matchesSearch && matchesStatus;
   });
 
+  // Helper to reliably match orders with a customer by normalized phone or email
+  const getCustomerOrders = (phone?: string, email?: string): Order[] => {
+    const cleanP = (phone || '').trim().replace(/[\s.-]/g, '');
+    const cleanE = (email || '').trim().toLowerCase();
+    if (!cleanP && !cleanE) return [];
+    return orders.filter((o) => {
+      const oP = (o.customerPhone || '').trim().replace(/[\s.-]/g, '');
+      const oE = (o.customerEmail || '').trim().toLowerCase();
+      return (cleanP && oP && cleanP === oP) || (cleanE && oE && cleanE === oE);
+    });
+  };
+
   // Filter Customers
   const filteredCustomers = customers.filter((cus) => {
     const q = customerSearchTerm.toLowerCase();
@@ -293,7 +306,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
     if (customerFilter === 'active') return !cus.isBlocked;
     if (customerFilter === 'blocked') return !!cus.isBlocked;
     if (customerFilter === 'with_orders') {
-      return orders.some((o) => o.customerPhone === cus.phone);
+      return getCustomerOrders(cus.phone, cus.email).length > 0;
     }
 
     return true;
@@ -307,16 +320,54 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
   const handleUpdateStatus = async (orderId: string, newStatus: OrderStatus) => {
     setIsUpdatingOrder(true);
     try {
-      const orderRef = doc(db, 'orders', orderId);
-      await updateDoc(orderRef, {
+      const now = new Date();
+      const isoString = now.toISOString();
+      const currentOrder = orders.find((o) => o.id === orderId);
+
+      const updatePayload: Record<string, any> = {
         status: newStatus,
-        updatedAt: new Date().toISOString(),
-      });
+        updatedAt: isoString,
+      };
+
+      let updatedTimeline = currentOrder?.timeline ? [...currentOrder.timeline] : [];
+
+      if (newStatus === 'cancelled') {
+        updatePayload.cancelledAt = isoString;
+        updatePayload.cancelledBy = 'admin';
+        updatePayload.cancelReason = updatePayload.cancelReason || 'Quản trị viên hủy đơn';
+        updatedTimeline.push({
+          status: 'cancelled',
+          title: 'Đơn hàng đã được Quản trị viên TINGO hủy',
+          time: formatVietnameseDateTime(isoString, true),
+          completed: true,
+        });
+        updatePayload.timeline = updatedTimeline;
+      }
+
+      const orderRef = doc(db, 'orders', orderId);
+      await updateDoc(orderRef, sanitizeFirestoreData(updatePayload));
+
+      const updatedOrder: Order = {
+        ...(currentOrder || ({} as Order)),
+        ...updatePayload,
+        id: orderId,
+        status: newStatus,
+      };
+
       setOrders((prev) =>
-        prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
+        prev.map((o) => (o.id === orderId ? updatedOrder : o))
       );
       if (selectedOrder && selectedOrder.id === orderId) {
-        setSelectedOrder((prev) => (prev ? { ...prev, status: newStatus } : null));
+        setSelectedOrder(updatedOrder);
+      }
+
+      // If cancelled by admin, also notify telegram
+      if (newStatus === 'cancelled' && currentOrder) {
+        try {
+          await notifyCancelOrder(updatedOrder, 'Quản trị viên hủy đơn', 'admin');
+        } catch (e) {
+          console.warn('Admin cancel notification error:', e);
+        }
       }
     } catch (err) {
       console.error('Failed to update order status on Firestore', err);
@@ -392,57 +443,58 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
 
   /**
    * Delete customer completely:
-   * When deleted, the phone and Gmail are wiped from Firestore and caches.
+   * When deleted, ONLY the specific phone's document is deleted from Firestore and caches.
    * They can now register freshly as if they never registered before.
    */
   const executeDeleteCustomer = async (phone: string, email?: string) => {
     setIsActionLoading(true);
     try {
-      // 1. Delete customer docs from Firestore (by phone and by CUS-phone)
-      await deleteDoc(doc(db, 'customers', phone)).catch(() => {});
-      await deleteDoc(doc(db, 'customers', `CUS-${phone}`)).catch(() => {});
+      const cleanPhone = phone.trim().replace(/[\s.-]/g, '');
+      const cleanEmail = email?.trim().toLowerCase();
 
-      // Query and delete any docs with matching phone
+      // 1. Delete customer doc from Firestore: customers/{cleanPhone} and customers/CUS-{cleanPhone}
+      await deleteDoc(doc(db, 'customers', cleanPhone)).catch(() => {});
+      await deleteDoc(doc(db, 'customers', `CUS-${cleanPhone}`)).catch(() => {});
+
+      // Query and delete any doc where phone matches cleanPhone exactly
       try {
-        const phoneQ = query(collection(db, 'customers'), where('phone', '==', phone));
+        const phoneQ = query(collection(db, 'customers'), where('phone', '==', cleanPhone));
         const phoneSnap = await getDocs(phoneQ);
         for (const docSnap of phoneSnap.docs) {
-          await deleteDoc(docSnap.ref).catch(() => {});
+          if (docSnap.id === cleanPhone || docSnap.id === `CUS-${cleanPhone}` || docSnap.data().phone === cleanPhone) {
+            await deleteDoc(docSnap.ref).catch(() => {});
+          }
         }
       } catch (e) {
         console.warn('Phone docs delete query note:', e);
       }
 
-      // Query and delete any docs with matching email if present
-      if (email) {
-        try {
-          const emailQ = query(collection(db, 'customers'), where('email', '==', email.toLowerCase()));
-          const emailSnap = await getDocs(emailQ);
-          for (const docSnap of emailSnap.docs) {
-            await deleteDoc(docSnap.ref).catch(() => {});
-          }
-        } catch (e) {
-          console.warn('Email docs delete query note:', e);
-        }
-      }
-
       // 2. Delete blocked entries if any
-      await deleteDoc(doc(db, 'blocked_identifiers', phone)).catch(() => {});
-      if (email) {
-        await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(email.toLowerCase()))).catch(() => {});
+      await deleteDoc(doc(db, 'blocked_identifiers', cleanPhone)).catch(() => {});
+      if (cleanEmail) {
+        await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(cleanEmail))).catch(() => {});
       }
 
       // 3. Purge from local caches & sessions
-      purgeLocalAccountData(phone, email);
+      purgeLocalAccountData(cleanPhone, cleanEmail);
 
-      // 4. Update UI state
-      setCustomers((prev) => prev.filter((c) => c.phone !== phone));
-      setSelectedCustomerPhones((prev) => prev.filter((p) => p !== phone));
-      if (selectedCustomer?.phone === phone) setSelectedCustomer(null);
+      // 4. Notify client session to immediately clear & show alert
+      window.dispatchEvent(
+        new CustomEvent('tingo-customer-session-cleared', {
+          detail: { phone: cleanPhone, email: cleanEmail, blocked: false, deleted: true },
+        })
+      );
+
+      // 5. Update UI state
+      setCustomers((prev) => prev.filter((c) => c.phone.trim().replace(/[\s.-]/g, '') !== cleanPhone));
+      setSelectedCustomerPhones((prev) => prev.filter((p) => p.trim().replace(/[\s.-]/g, '') !== cleanPhone));
+      if (selectedCustomer && selectedCustomer.phone.trim().replace(/[\s.-]/g, '') === cleanPhone) {
+        setSelectedCustomer(null);
+      }
 
       setActionToast({
         type: 'success',
-        message: `Đã XÓA VĨNH VIỄN khách hàng (SĐT: ${phone}). Số điện thoại & Email này đã có thể đăng ký mới hoàn toàn!`,
+        message: `Đã XÓA VĨNH VIỄN khách hàng (SĐT: ${cleanPhone}). Dữ liệu đã được giải phóng hoàn toàn!`,
       });
       setTimeout(() => setActionToast(null), 4500);
     } catch (err) {
@@ -463,27 +515,44 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
 
     setIsActionLoading(true);
     try {
-      const targets = customers.filter((c) => selectedCustomerPhones.includes(c.phone));
+      const phonesToDelete = [...selectedCustomerPhones].map((p) => p.trim().replace(/[\s.-]/g, ''));
+      const targets = customers.filter((c) =>
+        phonesToDelete.includes(c.phone.trim().replace(/[\s.-]/g, ''))
+      );
 
       for (const cus of targets) {
-        await deleteDoc(doc(db, 'customers', cus.phone)).catch(() => {});
-        await deleteDoc(doc(db, 'customers', `CUS-${cus.phone}`)).catch(() => {});
-        await deleteDoc(doc(db, 'blocked_identifiers', cus.phone)).catch(() => {});
-        if (cus.email) {
-          await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(cus.email.toLowerCase()))).catch(() => {});
+        const cleanPhone = cus.phone.trim().replace(/[\s.-]/g, '');
+        const cleanEmail = cus.email?.trim().toLowerCase();
+
+        await deleteDoc(doc(db, 'customers', cleanPhone)).catch(() => {});
+        await deleteDoc(doc(db, 'customers', `CUS-${cleanPhone}`)).catch(() => {});
+        await deleteDoc(doc(db, 'blocked_identifiers', cleanPhone)).catch(() => {});
+        if (cleanEmail) {
+          await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(cleanEmail))).catch(() => {});
         }
-        purgeLocalAccountData(cus.phone, cus.email);
+        purgeLocalAccountData(cleanPhone, cleanEmail);
+
+        window.dispatchEvent(
+          new CustomEvent('tingo-customer-session-cleared', {
+            detail: { phone: cleanPhone, email: cleanEmail, blocked: false, deleted: true },
+          })
+        );
       }
 
-      setCustomers((prev) => prev.filter((c) => !selectedCustomerPhones.includes(c.phone)));
-      if (selectedCustomer && selectedCustomerPhones.includes(selectedCustomer.phone)) {
+      setCustomers((prev) =>
+        prev.filter((c) => !phonesToDelete.includes(c.phone.trim().replace(/[\s.-]/g, '')))
+      );
+      if (
+        selectedCustomer &&
+        phonesToDelete.includes(selectedCustomer.phone.trim().replace(/[\s.-]/g, ''))
+      ) {
         setSelectedCustomer(null);
       }
       setSelectedCustomerPhones([]);
 
       setActionToast({
         type: 'success',
-        message: `Đã XÓA VĨNH VIỄN ${targets.length} tài khoản khách hàng thành công!`,
+        message: `Đã XÓA VĨNH VIỄN ${targets.length} tài khoản khách hàng đã chọn!`,
       });
       setTimeout(() => setActionToast(null), 4500);
     } catch (err) {
@@ -880,9 +949,11 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
 
     setIsTestingTelegram(false);
     if (res.success) {
+      // Auto save configuration to Firestore & LocalStorage so it's instantly active 24/7!
+      await saveTelegramConfig(telegramConfig);
       setTestResult({
         success: true,
-        message: 'Tuyệt vời! Tin nhắn kiểm tra đã được gửi thành công đến Telegram của bạn!',
+        message: 'Tuyệt vời! Kết nối thành công và ĐÃ TỰ ĐỘNG LƯU CẤU HÌNH lên hệ thống! Từ bây giờ khi có Đơn hàng hoặc Khách mới, Bot sẽ tự động báo về Telegram ngay lập tức.',
       });
     } else {
       setTestResult({
@@ -964,7 +1035,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
                 </span>
               </div>
               <p className="text-xs text-slate-500">
-                Đơn hàng ({orders.length}) &bull; Khách hàng ({customers.length}) &bull; {blockedCustomersCount > 0 ? `${blockedCustomersCount} đã bị chặn &bull; ` : ''}Thông báo Telegram
+                Đơn hàng ({orders.length}) • Khách hàng ({customers.length}) • {blockedCustomersCount > 0 ? `${blockedCustomersCount} đã bị chặn • ` : ''}Thông báo Telegram
               </p>
             </div>
           </div>
@@ -1497,9 +1568,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
                   filteredCustomers.map((cus) => {
                     const isSelected = selectedCustomer?.phone === cus.phone;
                     const isChecked = selectedCustomerPhones.includes(cus.phone);
-                    const customerOrders = orders.filter(
-                      (o) => o.customerPhone === cus.phone
-                    );
+                    const customerOrders = getCustomerOrders(cus.phone, cus.email);
                     const totalSpent = customerOrders.reduce(
                       (sum, o) => sum + (o.total || 0),
                       0
@@ -1884,53 +1953,59 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
                     )}
 
                     {/* Order History for this customer */}
-                    <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-2 text-xs">
-                      <div className="font-bold text-slate-700 flex items-center justify-between">
-                        <div className="flex items-center gap-1.5">
-                          <ShoppingBag className="w-4 h-4 text-emerald-600" />
-                          <span>Lịch sử đơn hàng của khách này</span>
-                        </div>
-                        <span className="text-slate-400 font-normal">
-                          {orders.filter((o) => o.customerPhone === selectedCustomer.phone).length}{' '}
-                          đơn
-                        </span>
-                      </div>
-
-                      <div className="divide-y divide-slate-100 max-h-44 overflow-y-auto">
-                        {orders.filter((o) => o.customerPhone === selectedCustomer.phone).length ===
-                        0 ? (
-                          <div className="py-3 text-center text-slate-400 text-[11px]">
-                            Khách hàng này chưa phát sinh đơn hàng nào
+                    {(() => {
+                      const customerHistoryOrders = getCustomerOrders(
+                        selectedCustomer.phone,
+                        selectedCustomer.email
+                      );
+                      return (
+                        <div className="p-3.5 bg-white rounded-xl border border-slate-200 space-y-2 text-xs">
+                          <div className="font-bold text-slate-700 flex items-center justify-between">
+                            <div className="flex items-center gap-1.5">
+                              <ShoppingBag className="w-4 h-4 text-emerald-600" />
+                              <span>Lịch sử đơn hàng của khách này</span>
+                            </div>
+                            <span className="text-slate-400 font-normal">
+                              {customerHistoryOrders.length} đơn
+                            </span>
                           </div>
-                        ) : (
-                          orders
-                            .filter((o) => o.customerPhone === selectedCustomer.phone)
-                            .map((ord) => (
-                              <div
-                                key={ord.id}
-                                onClick={() => {
-                                  setSelectedOrder(ord);
-                                  setActiveTab('orders');
-                                }}
-                                className="py-2 flex items-center justify-between gap-2 hover:bg-slate-50 p-1.5 rounded-lg cursor-pointer transition-colors"
-                              >
-                                <div>
-                                  <div className="font-mono font-bold text-slate-900">
-                                    #{ord.id}
-                                  </div>
-                                  <div className="text-[11px] text-slate-500 font-medium">{formatVietnameseDateTime(ord.createdAt)}</div>
-                                </div>
-                                <div className="text-right">
-                                  <div className="font-mono font-bold text-emerald-700">
-                                    {(ord.total || 0).toLocaleString('vi-VN')}đ
-                                  </div>
-                                  <div>{getStatusBadge(ord.status)}</div>
-                                </div>
+
+                          <div className="divide-y divide-slate-100 max-h-44 overflow-y-auto">
+                            {customerHistoryOrders.length === 0 ? (
+                              <div className="py-3 text-center text-slate-400 text-[11px]">
+                                Khách hàng này chưa phát sinh đơn hàng nào
                               </div>
-                            ))
-                        )}
-                      </div>
-                    </div>
+                            ) : (
+                              customerHistoryOrders.map((ord) => (
+                                <div
+                                  key={ord.id}
+                                  onClick={() => {
+                                    setSelectedOrder(ord);
+                                    setActiveTab('orders');
+                                  }}
+                                  className="py-2 flex items-center justify-between gap-2 hover:bg-slate-50 p-1.5 rounded-lg cursor-pointer transition-colors"
+                                >
+                                  <div>
+                                    <div className="font-mono font-bold text-slate-900">
+                                      #{ord.id}
+                                    </div>
+                                    <div className="text-[11px] text-slate-500 font-medium">
+                                      {formatVietnameseDateTime(ord.createdAt)}
+                                    </div>
+                                  </div>
+                                  <div className="text-right">
+                                    <div className="font-mono font-bold text-emerald-700">
+                                      {(ord.total || 0).toLocaleString('vi-VN')}đ
+                                    </div>
+                                    <div>{getStatusBadge(ord.status)}</div>
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : (
                   <div className="h-full flex flex-col items-center justify-center text-center p-6 text-slate-400">
@@ -2071,6 +2146,21 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
                       className="rounded text-sky-600 focus:ring-sky-500 w-4 h-4 cursor-pointer"
                     />
                     <span>Thông báo khi có <strong>Đơn hàng mới được đặt</strong></span>
+                  </label>
+
+                  <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer p-2 rounded-lg hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      checked={telegramConfig.enabledCancelOrder ?? true}
+                      onChange={(e) =>
+                        setTelegramConfig({
+                          ...telegramConfig,
+                          enabledCancelOrder: e.target.checked,
+                        })
+                      }
+                      className="rounded text-sky-600 focus:ring-sky-500 w-4 h-4 cursor-pointer"
+                    />
+                    <span>Thông báo khi có <strong>Đơn hàng bị hủy</strong> (từ khách hoặc admin)</span>
                   </label>
                 </div>
 

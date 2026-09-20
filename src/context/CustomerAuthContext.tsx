@@ -15,6 +15,7 @@ import { db } from '../lib/firebase';
 import { notifyNewRegistration } from '../lib/telegram';
 import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
 import { isCreatedTodayVN } from '../utils/dateFormatter';
+import { ShieldAlert, Ban, X, UserPlus, PhoneCall } from 'lucide-react';
 
 const STORAGE_KEY = 'tingo_customer_user_session';
 const ACCOUNTS_CACHE_KEY = 'tingo_registered_customers_cache';
@@ -49,6 +50,7 @@ interface CustomerAuthContextType {
   updateCustomerProfile: (data: Partial<CustomerUser>) => Promise<void>;
   changePassword: (oldPass: string, newPass: string) => Promise<{ success: boolean; error?: string }>;
   consumeFreeshipVoucher: () => boolean;
+  refundFreeshipVoucher: (amount?: number) => void;
   markFirstOrderCompleted: () => void;
   getAvailableVouchers: () => Voucher[];
   isAuthModalOpen: boolean;
@@ -78,6 +80,11 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [pendingCallback, setPendingCallback] = useState<(() => void) | null>(null);
+  const [blockedAlertNotice, setBlockedAlertNotice] = useState<{
+    type: 'blocked' | 'deleted';
+    title: string;
+    message: string;
+  } | null>(null);
 
   // Sync with localStorage & listen for cross-tab or admin invalidation
   useEffect(() => {
@@ -88,18 +95,38 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
 
     const handleInvalidation = (e: any) => {
-      const targetPhone = e.detail?.phone;
-      const targetEmail = e.detail?.email;
+      const targetPhone = e.detail?.phone?.replace(/[\s.-]/g, '');
+      const targetEmail = e.detail?.email?.trim().toLowerCase();
+      const isBlocked = e.detail?.blocked === true;
+      const isDeleted = e.detail?.deleted === true;
+
+      const currentPhone = customer?.phone?.replace(/[\s.-]/g, '');
+      const currentEmail = customer?.email?.trim().toLowerCase();
+
       if (
         customer &&
-        (customer.phone === targetPhone ||
-          (customer.email && customer.email.toLowerCase() === targetEmail?.toLowerCase()) ||
+        (currentPhone === targetPhone ||
+          (currentEmail && currentEmail === targetEmail) ||
           !targetPhone)
       ) {
         setCustomer(null);
         localStorage.removeItem(STORAGE_KEY);
-        if (e.detail?.blocked) {
-          alert('⚠️ Thông báo từ Quản Trị TINGO:\nTài khoản của bạn đã bị khóa quyền truy cập.');
+        localStorage.removeItem('tingo_checkout_draft');
+
+        if (isBlocked) {
+          setBlockedAlertNotice({
+            type: 'blocked',
+            title: 'TÀI KHOẢN ĐÃ BỊ KHÓA!',
+            message:
+              'Quản trị viên đã khóa quyền truy cập của tài khoản này. Mọi thao tác đặt hàng & ưu đãi đã bị tạm ngưng. Vui lòng liên hệ CSKH TINGO nếu cần hỗ trợ.',
+          });
+        } else if (isDeleted) {
+          setBlockedAlertNotice({
+            type: 'deleted',
+            title: 'TÀI KHOẢN ĐÃ ĐƯỢC XÓA!',
+            message:
+              'Tài khoản của bạn đã được xóa khỏi hệ thống bởi quản trị viên. Dữ liệu tài khoản đã được dọn sạch. Bạn có thể tiến hành đăng ký tài khoản mới bất cứ lúc nào.',
+          });
         }
       }
     };
@@ -108,18 +135,51 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return () => window.removeEventListener('tingo-customer-session-cleared', handleInvalidation);
   }, [customer]);
 
-  // Real-time Session Block Guard: If logged-in user gets blocked in Firestore, kick them out immediately
+  // Real-time Firestore Session Guard: If logged-in user gets blocked or deleted in Firestore, lock/kick them out immediately
   useEffect(() => {
     if (!customer || customer.id === 'ADMIN-TINGO') return;
 
+    const cleanPhone = (customer.phone || '').replace(/[\s.-]/g, '');
+    if (!cleanPhone) return;
+
     try {
-      const unsub = onSnapshot(doc(db, 'customers', customer.phone), (snap) => {
-        if (snap.exists()) {
+      const unsub = onSnapshot(doc(db, 'customers', cleanPhone), (snap) => {
+        if (!snap.exists()) {
+          // Document was deleted by Admin in Firestore - Force Logout immediately
+          setCustomer(null);
+          localStorage.removeItem(STORAGE_KEY);
+          localStorage.removeItem('tingo_checkout_draft');
+
+          // Clean local accounts cache for this phone/email
+          try {
+            const accs = getLocalAccounts();
+            if (accs[cleanPhone]) delete accs[cleanPhone];
+            if (customer.email && accs[customer.email.toLowerCase()]) delete accs[customer.email.toLowerCase()];
+            localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(accs));
+          } catch {
+            // ignore
+          }
+
+          setBlockedAlertNotice({
+            type: 'deleted',
+            title: 'TÀI KHOẢN ĐÃ ĐƯỢC XÓA KHỎI HỆ THỐNG',
+            message:
+              'Tài khoản của bạn đã được Quản trị viên xóa khỏi hệ thống TINGO. Bạn đã bị đăng xuất tự động. Để tiếp tục mua sắm và nhận lại 5 mã Freeship cùng các ưu đãi, quý khách vui lòng Đăng ký lại tài khoản mới.',
+          });
+        } else {
           const data = snap.data() as CustomerUser;
           if (data.isBlocked) {
+            // Account was marked as blocked by Admin
             setCustomer(null);
             localStorage.removeItem(STORAGE_KEY);
-            alert('⚠️ Thông báo từ Quản Trị TINGO:\nTài khoản của bạn đã bị khóa quyền truy cập.');
+            localStorage.removeItem('tingo_checkout_draft');
+            setBlockedAlertNotice({
+              type: 'blocked',
+              title: 'TÀI KHOẢN ĐÃ BỊ KHÓA!',
+              message:
+                data.blockedReason ||
+                'Tài khoản này đã bị quản trị viên khóa quyền truy cập. Bạn không thể tiếp tục đặt hàng hoặc đăng nhập.',
+            });
           }
         }
       });
@@ -639,6 +699,18 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return true;
   };
 
+  const refundFreeshipVoucher = (amount: number = 1) => {
+    if (!customer) return;
+    const newCount = Math.min(5, (customer.freeshipVouchers || 0) + amount);
+    setCustomer((prev) => (prev ? { ...prev, freeshipVouchers: newCount } : null));
+    try {
+      const customerDocRef = doc(db, 'customers', customer.phone);
+      updateDoc(customerDocRef, { freeshipVouchers: newCount }).catch((err) => console.warn(err));
+    } catch (err) {
+      console.warn(err);
+    }
+  };
+
   const markFirstOrderCompleted = () => {
     if (!customer) return;
     setCustomer((prev) => (prev ? { ...prev, isFirstOrder: false } : null));
@@ -732,6 +804,7 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
         updateCustomerProfile,
         changePassword,
         consumeFreeshipVoucher,
+        refundFreeshipVoucher,
         markFirstOrderCompleted,
         getAvailableVouchers,
         isAuthModalOpen,
@@ -744,6 +817,84 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }}
     >
       {children}
+
+      {/* Real-time Account Blocked / Deleted Alert Modal */}
+      {blockedAlertNotice && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-rose-100 text-center relative animate-scale-in">
+            <button
+              onClick={() => setBlockedAlertNotice(null)}
+              className="absolute top-4 right-4 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+
+            <div
+              className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 ${
+                blockedAlertNotice.type === 'blocked'
+                  ? 'bg-rose-100 text-rose-600'
+                  : 'bg-amber-100 text-amber-600'
+              }`}
+            >
+              {blockedAlertNotice.type === 'blocked' ? (
+                <Ban className="w-9 h-9" />
+              ) : (
+                <ShieldAlert className="w-9 h-9" />
+              )}
+            </div>
+
+            <span
+              className={`text-[11px] font-black uppercase tracking-wider px-3 py-1 rounded-full ${
+                blockedAlertNotice.type === 'blocked'
+                  ? 'bg-rose-100 text-rose-800'
+                  : 'bg-amber-100 text-amber-800'
+              }`}
+            >
+              Thông Báo Khách Hàng
+            </span>
+
+            <h3 className="text-xl font-black text-slate-900 font-display mt-2">
+              {blockedAlertNotice.title}
+            </h3>
+
+            <p className="text-xs text-slate-600 leading-relaxed mt-2.5">
+              {blockedAlertNotice.message}
+            </p>
+
+            <div className="mt-6 flex flex-col sm:flex-row gap-2">
+              <button
+                type="button"
+                onClick={() => setBlockedAlertNotice(null)}
+                className="flex-1 py-3 px-4 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer transition-colors"
+              >
+                Đóng thông báo
+              </button>
+
+              {blockedAlertNotice.type === 'deleted' ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBlockedAlertNotice(null);
+                    openAuthModal();
+                  }}
+                  className="flex-1 py-3 px-4 rounded-xl bg-[#008874] hover:bg-[#007052] text-white font-bold text-xs shadow-md flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Đăng ký mới</span>
+                </button>
+              ) : (
+                <a
+                  href="tel:19008888"
+                  className="flex-1 py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shadow-md flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                >
+                  <PhoneCall className="w-4 h-4" />
+                  <span>Gọi Hotline CSKH</span>
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </CustomerAuthContext.Provider>
   );
 };

@@ -55,6 +55,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     openAuthModal,
     consumeFreeshipVoucher,
     markFirstOrderCompleted,
+    updateCustomerProfile,
   } = useCustomerAuth();
 
   const [name, setName] = useState('');
@@ -74,15 +75,25 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   // Validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  // Auto-fill customer info when logged in
+  // Auto-fill customer info when modal opens or customer changes
   useEffect(() => {
-    if (customer) {
-      if (!name) setName(customer.name || '');
-      if (!phone) setNamePhoneSafe(customer.phone || '');
-      if (!email && customer.email) setEmail(customer.email);
-      if (!address && customer.address) setAddress(customer.address);
-      if (customer.city) setCity(customer.city);
-      if (customer.district) setDistrict(customer.district);
+    if (isOpen) {
+      setCreatedOrder(null);
+      setErrors({});
+      setIsSubmitting(false);
+
+      if (customer) {
+        setName(customer.name || '');
+        setPhone(customer.phone || '');
+        setEmail(customer.email || '');
+        setAddress(customer.address || '');
+        if (customer.city) setCity(customer.city);
+        if (customer.district) setDistrict(customer.district);
+      }
+    } else {
+      setCreatedOrder(null);
+      setErrors({});
+      setIsSubmitting(false);
     }
   }, [customer, isOpen]);
 
@@ -137,6 +148,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     // 0. Check daily order limit (Max 5 orders / day)
     if (hasReachedDailyLimit) {
       errs.limit = `Tài khoản đã đạt giới hạn tối đa ${effectiveMaxDaily} đơn hàng trong ngày hôm nay. Hệ thống sẽ tự động làm mới sau 00:00.`;
+    }
+
+    // Check cart items
+    if (!cartItems || cartItems.length === 0) {
+      errs.cart = 'Giỏ hàng đang trống. Vui lòng chọn sản phẩm trước khi đặt hàng.';
     }
 
     // 1. Tên bắt buộc ít nhất 3 ký tự
@@ -198,130 +214,147 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
     setIsSubmitting(true);
 
-    const randomId = `TIN-${Math.floor(10000 + Math.random() * 90000)}`;
-    const now = new Date();
-    const isoString = now.toISOString();
-    const hours = now.getHours().toString().padStart(2, '0');
-    const minutes = now.getMinutes().toString().padStart(2, '0');
-    const seconds = now.getSeconds().toString().padStart(2, '0');
-    const day = now.getDate().toString().padStart(2, '0');
-    const month = (now.getMonth() + 1).toString().padStart(2, '0');
-    const year = now.getFullYear();
-    const dateStr = `${hours}:${minutes}:${seconds} ngày ${day}/${month}/${year}`;
-
-    const newOrder: Order = {
-      id: randomId,
-      createdAt: isoString,
-      customerName: name.trim(),
-      customerPhone: cleanPhone,
-      customerEmail: email.trim() || undefined,
-      shippingAddress: `${address.trim()}, ${district}, ${city}`,
-      city,
-      district,
-      paymentMethod,
-      items: [...cartItems],
-      subtotal,
-      discountAmount,
-      shippingFee: effectiveShippingFee,
-      total,
-      status: 'pending',
-      couponCode: appliedCoupon || undefined,
-      notes: notes.trim() || undefined,
-      timeline: [
-        {
-          status: 'pending',
-          title: 'Đơn hàng đã được đặt thành công',
-          time: dateStr,
-          completed: true,
-        },
-        {
-          status: 'processing',
-          title: 'TINGO đang chuẩn bị & đóng gói sản phẩm sạch',
-          time: 'Dự kiến trong 2 giờ tới',
-          completed: false,
-        },
-        {
-          status: 'shipping',
-          title: 'Bàn giao đơn vị vận chuyển hỏa tốc',
-          time: 'Dự kiến trong ngày',
-          completed: false,
-        },
-        {
-          status: 'delivered',
-          title: 'Giao hàng tận tay người nhận',
-          time: '1-2 ngày tới',
-          completed: false,
-        },
-      ],
-    };
-
-    // Consume freeship voucher if applied
-    if (appliedCoupon === 'FREESHIP') {
-      consumeFreeshipVoucher();
-    }
-    markFirstOrderCompleted();
-
-    // 1. Save to local orders cache for instant rendering
     try {
-      const existingRaw = localStorage.getItem('tingo_orders_storage');
-      const existingList = existingRaw ? JSON.parse(existingRaw) : [];
-      localStorage.setItem('tingo_orders_storage', JSON.stringify([newOrder, ...existingList]));
-    } catch (e) {
-      console.warn('Local order storage note:', e);
-    }
+      const randomId = `TIN-${Math.floor(10000 + Math.random() * 90000)}`;
+      const now = new Date();
+      const isoString = now.toISOString();
+      const hours = now.getHours().toString().padStart(2, '0');
+      const minutes = now.getMinutes().toString().padStart(2, '0');
+      const seconds = now.getSeconds().toString().padStart(2, '0');
+      const day = now.getDate().toString().padStart(2, '0');
+      const month = (now.getMonth() + 1).toString().padStart(2, '0');
+      const year = now.getFullYear();
+      const dateStr = `${hours}:${minutes}:${seconds} ngày ${day}/${month}/${year}`;
 
-    // 2. Persist order to Firebase Firestore & update Customer record
-    try {
-      const cleanOrderPayload = sanitizeFirestoreData(newOrder);
-      await setDoc(doc(db, 'orders', newOrder.id), cleanOrderPayload);
+      const newOrder: Order = {
+        id: randomId,
+        createdAt: isoString,
+        customerName: name.trim(),
+        customerPhone: cleanPhone,
+        customerEmail: email.trim() || undefined,
+        shippingAddress: `${address.trim()}, ${district}, ${city}`,
+        city,
+        district,
+        paymentMethod,
+        items: [...cartItems],
+        subtotal,
+        discountAmount,
+        shippingFee: effectiveShippingFee,
+        total,
+        status: 'pending',
+        couponCode: appliedCoupon || undefined,
+        notes: notes.trim() || undefined,
+        timeline: [
+          {
+            status: 'pending',
+            title: 'Đơn hàng đã được đặt thành công',
+            time: dateStr,
+            completed: true,
+          },
+          {
+            status: 'processing',
+            title: 'TINGO đang chuẩn bị & đóng gói sản phẩm sạch',
+            time: 'Dự kiến trong 2 giờ tới',
+            completed: false,
+          },
+          {
+            status: 'shipping',
+            title: 'Bàn giao đơn vị vận chuyển hỏa tốc',
+            time: 'Dự kiến trong ngày',
+            completed: false,
+          },
+          {
+            status: 'delivered',
+            title: 'Giao hàng tận tay người nhận',
+            time: '1-2 ngày tới',
+            completed: false,
+          },
+        ],
+      };
 
-      // Also persist / update customer profile in Firestore
-      if (cleanPhone) {
-        const customerProfileData = sanitizeFirestoreData({
-          id: `CUS-${cleanPhone}`,
-          name: name.trim(),
-          phone: cleanPhone,
-          email: email.trim() || '',
-          address: address.trim(),
-          city: city,
-          district: district,
-          lastOrderAt: isoString,
-          lastOrderId: newOrder.id,
-        });
-        await setDoc(
-          doc(db, 'customers', cleanPhone),
-          customerProfileData,
-          { merge: true }
-        );
+      // Consume freeship voucher if applied
+      if (appliedCoupon === 'FREESHIP') {
+        consumeFreeshipVoucher();
       }
-    } catch (err) {
-      console.error('Firestore order sync error:', err);
-    }
+      markFirstOrderCompleted();
 
-    // 3. Notify Telegram Bot in real-time
-    try {
-      await notifyNewOrder(newOrder);
-    } catch (err) {
-      console.warn('Telegram new order alert warning:', err);
-    }
+      // 1. Save to local orders cache for instant rendering
+      try {
+        const existingRaw = localStorage.getItem('tingo_orders_storage');
+        const existingList: Order[] = existingRaw ? JSON.parse(existingRaw) : [];
+        localStorage.setItem(
+          'tingo_orders_storage',
+          JSON.stringify([newOrder, ...existingList.filter((o) => o.id !== newOrder.id)])
+        );
+      } catch (e) {
+        console.warn('Local order storage note:', e);
+      }
 
-    // Increment today's count in state
-    setTodayOrdersCount((prev) => prev + 1);
+      // 2. Persist order to Firebase Firestore & update Customer record
+      try {
+        const cleanOrderPayload = sanitizeFirestoreData(newOrder);
+        await setDoc(doc(db, 'orders', newOrder.id), cleanOrderPayload);
 
-    setIsSubmitting(false);
-    setCreatedOrder(newOrder);
-    onOrderSuccess(newOrder);
+        // Also persist / update customer profile in Firestore & local state
+        if (cleanPhone) {
+          const customerProfileData = sanitizeFirestoreData({
+            id: `CUS-${cleanPhone}`,
+            name: name.trim(),
+            phone: cleanPhone,
+            email: email.trim() || '',
+            address: address.trim(),
+            city: city,
+            district: district,
+            lastOrderAt: isoString,
+            lastOrderId: newOrder.id,
+          });
+          await setDoc(
+            doc(db, 'customers', cleanPhone),
+            customerProfileData,
+            { merge: true }
+          );
+          // Update customer auth state
+          updateCustomerProfile({
+            address: address.trim(),
+            city: city,
+            district: district,
+            lastOrderAt: isoString,
+            lastOrderId: newOrder.id,
+          });
+        }
+      } catch (err) {
+        console.error('Firestore order sync error:', err);
+      }
 
-    // Trigger Celebration Confetti
-    try {
-      confetti({
-        particleCount: 80,
-        spread: 70,
-        origin: { y: 0.6 },
-        colors: ['#008874', '#0284c7', '#10b981', '#fbbf24'],
-      });
-    } catch (err) {
-      // Safe fallback
+      // 3. Notify Telegram Bot in real-time
+      try {
+        await notifyNewOrder(newOrder);
+      } catch (err) {
+        console.warn('Telegram new order alert warning:', err);
+      }
+
+      // Increment today's count in state
+      setTodayOrdersCount((prev) => prev + 1);
+
+      setCreatedOrder(newOrder);
+      onOrderSuccess(newOrder);
+
+      // Trigger Celebration Confetti
+      try {
+        confetti({
+          particleCount: 80,
+          spread: 70,
+          origin: { y: 0.6 },
+          colors: ['#008874', '#0284c7', '#10b981', '#fbbf24'],
+        });
+      } catch (err) {
+        // Safe fallback
+      }
+    } catch (err: any) {
+      console.error('Submit order error:', err);
+      setErrors({ form: 'Có lỗi xảy ra khi xử lý đặt hàng. Vui lòng thử lại.' });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -331,13 +364,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     setTimeout(() => setCopiedBank(false), 2000);
   };
 
+  const handleCloseModal = () => {
+    setCreatedOrder(null);
+    setErrors({});
+    setIsSubmitting(false);
+    onClose();
+  };
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-xs animate-fade-in">
+    <div
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          handleCloseModal();
+        }
+      }}
+      className="fixed inset-0 z-50 overflow-y-auto flex items-center justify-center p-3 sm:p-4 bg-slate-950/75 backdrop-blur-xs animate-fade-in"
+    >
       <div className="bg-white rounded-3xl max-w-2xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-emerald-100 relative p-5 sm:p-7 animate-scale-in">
         
         {/* Close Button */}
         <button
-          onClick={onClose}
+          onClick={handleCloseModal}
           className="absolute top-4 right-4 sm:top-5 sm:right-5 w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition-colors cursor-pointer z-10"
         >
           <X className="w-4 h-4" />
@@ -402,7 +449,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             </p>
 
             <button
-              onClick={onClose}
+              onClick={handleCloseModal}
               className="px-8 py-3 rounded-full bg-[#008874] hover:bg-[#007052] text-white font-bold text-sm shadow-md transition-all cursor-pointer"
             >
               Tiếp Tục Mua Sắm

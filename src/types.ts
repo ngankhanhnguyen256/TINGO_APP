@@ -85,6 +85,9 @@ export interface Order {
   }[];
   couponCode?: string;
   notes?: string;
+  cancelledAt?: string;
+  cancelledBy?: 'customer' | 'admin';
+  cancelReason?: string;
 }
 
 export interface HealthArticle {

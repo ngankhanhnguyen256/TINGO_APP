@@ -45,7 +45,9 @@ function MainApp() {
 
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
   const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
+  const [checkoutKey, setCheckoutKey] = useState(1);
   const [trackingModalOpen, setTrackingModalOpen] = useState(false);
+  const [selectedTrackingOrder, setSelectedTrackingOrder] = useState<Order | null>(null);
   const [storyModalOpen, setStoryModalOpen] = useState(false);
   const [searchModalOpen, setSearchModalOpen] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -195,15 +197,26 @@ function MainApp() {
     setDiscountAmount(discount);
     setShippingFee(shipFee);
     setCartDrawerOpen(false);
+    setCheckoutKey((prev) => prev + 1);
     setCheckoutModalOpen(true);
   };
 
   const handleOrderSuccess = (newOrder: Order) => {
-    setOrders((prev) => [newOrder, ...prev]);
+    setOrders((prev) => [newOrder, ...prev.filter((o) => o.id !== newOrder.id)]);
     setCartItems([]);
     showToast(
       'Đặt hàng thành công! 🎉',
       `Mã đơn hàng #${newOrder.id} đã được gửi tới hệ thống đóng gói TINGO.`
+    );
+  };
+
+  const handleOrderCancelled = (cancelledOrder: Order) => {
+    setOrders((prev) =>
+      prev.map((o) => (o.id === cancelledOrder.id ? cancelledOrder : o))
+    );
+    showToast(
+      'Đã hủy đơn hàng',
+      `Đơn hàng #${cancelledOrder.id} đã được hủy thành công và đồng bộ tới hệ thống.`
     );
   };
 
@@ -304,6 +317,7 @@ function MainApp() {
 
       {/* Checkout Modal */}
       <CheckoutModal
+        key={checkoutKey}
         isOpen={checkoutModalOpen}
         onClose={() => setCheckoutModalOpen(false)}
         cartItems={cartItems}
@@ -319,6 +333,7 @@ function MainApp() {
       {/* Customer Private Profile & Voucher Wallet Modal */}
       <CustomerProfileModal
         onOpenTracking={(order) => {
+          setSelectedTrackingOrder(order || null);
           setTrackingModalOpen(true);
         }}
       />
@@ -326,8 +341,13 @@ function MainApp() {
       {/* Order Tracking Modal */}
       <OrderTrackingModal
         isOpen={trackingModalOpen}
-        onClose={() => setTrackingModalOpen(false)}
+        onClose={() => {
+          setTrackingModalOpen(false);
+          setSelectedTrackingOrder(null);
+        }}
         recentOrders={orders}
+        initialOrder={selectedTrackingOrder}
+        onOrderCancelled={handleOrderCancelled}
       />
 
       {/* Product Quick View / Detail Modal */}

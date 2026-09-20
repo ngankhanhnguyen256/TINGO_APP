@@ -41,10 +41,21 @@ export const formatVietnameseDateTime = (
 export const isCreatedTodayVN = (dateVal?: string | number | Date | null): boolean => {
   if (!dateVal) return false;
   try {
+    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+
+    if (typeof dateVal === 'string') {
+      // Check if it has pattern DD/MM/YYYY
+      const match = dateVal.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+      if (match) {
+        const [, day, month, year] = match;
+        const formatted = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+        return formatted === today;
+      }
+    }
+
     const d = new Date(dateVal);
     if (isNaN(d.getTime())) return false;
     const itemDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(d);
-    const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
     return itemDay === today;
   } catch {
     return false;

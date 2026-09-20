@@ -17,11 +17,13 @@ import {
   ShieldCheck,
   Tag,
   ChevronRight,
+  XCircle,
 } from 'lucide-react';
 import { useCustomerAuth } from '../context/CustomerAuthContext';
 import { Order } from '../types';
 import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { formatVietnameseDateTime } from '../utils/dateFormatter';
 
 interface CustomerProfileModalProps {
   onOpenTracking?: (order?: Order) => void;
@@ -307,14 +309,22 @@ export const CustomerProfileModal: React.FC<CustomerProfileModalProps> = ({ onOp
                             <span className="text-sm font-black text-[#008874] font-mono">
                               #{ord.id}
                             </span>
-                            <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
-                              {ord.status === 'pending' && 'Chờ xác nhận'}
-                              {ord.status === 'processing' && 'Đang đóng gói'}
-                              {ord.status === 'shipping' && 'Đang vận chuyển'}
-                              {ord.status === 'delivered' && 'Đã giao thành công'}
-                            </span>
+                            {ord.status === 'cancelled' ? (
+                              <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
+                                <XCircle className="w-3 h-3" /> Đã hủy
+                              </span>
+                            ) : (
+                              <span className="text-[10px] font-extrabold uppercase px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800">
+                                {ord.status === 'pending' && 'Chờ xác nhận'}
+                                {ord.status === 'processing' && 'Đang đóng gói'}
+                                {ord.status === 'shipping' && 'Đang vận chuyển'}
+                                {ord.status === 'delivered' && 'Đã giao thành công'}
+                              </span>
+                            )}
                           </div>
-                          <p className="text-[11px] text-slate-400 mt-0.5">{ord.createdAt}</p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            {formatVietnameseDateTime(ord.createdAt)}
+                          </p>
                         </div>
                         <div className="text-right">
                           <span className="text-sm font-black text-rose-600">
