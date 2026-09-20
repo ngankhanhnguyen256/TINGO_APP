@@ -12,6 +12,16 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Blocked identifiers (phone/email blacklist)
+    match /blocked_identifiers/{id} {
+      allow read, write: if true;
+    }
+
+    // System settings including Telegram Bot configuration
+    match /system_settings/{settingId} {
+      allow read, write: if true;
+    }
+
     // Landing page visual config & product catalog sync
     match /landing_config/{docId} {
       allow read, write: if true;
@@ -21,6 +31,12 @@ service cloud.firestore {
     match /settings/{settingId} {
       allow read, write: if true;
     }
+
+    // Fallback rule for any nested collections
+    match /{document=**} {
+      allow read, write: if true;
+    }
   }
 }
+
 

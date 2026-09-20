@@ -52,8 +52,15 @@ function MainApp() {
   const [appliedCoupon, setAppliedCoupon] = useState<string>('');
   const [discountAmount, setDiscountAmount] = useState<number>(0);
   const [shippingFee, setShippingFee] = useState<number>(0);
-  // Real orders only from Firestore
-  const [orders, setOrders] = useState<Order[]>([]);
+  // Real orders from Firestore & local backup
+  const [orders, setOrders] = useState<Order[]>(() => {
+    try {
+      const saved = localStorage.getItem('tingo_orders_storage');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [activeSection, setActiveSection] = useState<string>('hero');
 
@@ -69,22 +76,38 @@ function MainApp() {
     prevIsLoggedInRef.current = isLoggedIn;
   }, [isLoggedIn]);
 
-  // Real-time Firestore orders listener
+  // Real-time Firestore orders listener with resilient sorting
   useEffect(() => {
     try {
-      const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
-      const unsubscribe = onSnapshot(q, (snapshot) => {
-        const firestoreOrders: Order[] = [];
-        snapshot.forEach((docSnap) => {
-          firestoreOrders.push({
-            ...(docSnap.data() as Order),
-            id: docSnap.id,
+      const unsubscribe = onSnapshot(
+        collection(db, 'orders'),
+        (snapshot) => {
+          const firestoreOrders: Order[] = [];
+          snapshot.forEach((docSnap) => {
+            firestoreOrders.push({
+              ...(docSnap.data() as Order),
+              id: docSnap.id,
+            });
           });
-        });
-        setOrders(firestoreOrders);
-      }, (err) => {
-        console.warn('Firestore orders subscription note:', err);
-      });
+
+          // Sort descending by date
+          const sorted = firestoreOrders.sort((a, b) => {
+            const timeA = new Date(a.createdAt).getTime() || (a as any).createdAtTimestamp || 0;
+            const timeB = new Date(b.createdAt).getTime() || (b as any).createdAtTimestamp || 0;
+            return timeB - timeA;
+          });
+
+          setOrders(sorted);
+          try {
+            localStorage.setItem('tingo_orders_storage', JSON.stringify(sorted));
+          } catch {
+            // ignore
+          }
+        },
+        (err) => {
+          console.warn('Firestore orders subscription note:', err);
+        }
+      );
       return () => unsubscribe();
     } catch (e) {
       console.warn('Firestore subscription catch:', e);

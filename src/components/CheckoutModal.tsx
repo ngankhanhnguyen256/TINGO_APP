@@ -25,6 +25,8 @@ import { ProductVisual } from './ProductVisual';
 import { useCustomerAuth } from '../context/CustomerAuthContext';
 import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { notifyNewOrder } from '../lib/telegram';
+import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -48,6 +50,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const {
     customer,
     isLoggedIn,
+    maxDailyOrders,
+    getTodayOrdersCount,
     openAuthModal,
     consumeFreeshipVoucher,
     markFirstOrderCompleted,
@@ -64,6 +68,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   const [copiedBank, setCopiedBank] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [createdOrder, setCreatedOrder] = useState<Order | null>(null);
+  const [todayOrdersCount, setTodayOrdersCount] = useState<number>(0);
+  const [isCheckingLimit, setIsCheckingLimit] = useState(false);
 
   // Validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -80,9 +86,40 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }
   }, [customer, isOpen]);
 
+  // Check today's order count for this account/phone
+  useEffect(() => {
+    if (!isOpen) return;
+
+    let isMounted = true;
+    const checkCount = async () => {
+      const targetPhone = phone || customer?.phone || '';
+      if (!targetPhone) return;
+      setIsCheckingLimit(true);
+      try {
+        const count = await getTodayOrdersCount(targetPhone);
+        if (isMounted) {
+          setTodayOrdersCount(count);
+        }
+      } catch {
+        // ignore
+      } finally {
+        if (isMounted) setIsCheckingLimit(false);
+      }
+    };
+
+    checkCount();
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, phone, customer?.phone]);
+
   const setNamePhoneSafe = (val: string) => {
     setPhone(val);
   };
+
+  const isAdminUser = customer?.id === 'ADMIN-TINGO' || phone === '0900000000';
+  const effectiveMaxDaily = maxDailyOrders || 5;
+  const hasReachedDailyLimit = !isAdminUser && todayOrdersCount >= effectiveMaxDaily;
 
   if (!isOpen) return null;
 
@@ -96,6 +133,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
   const validateForm = () => {
     const errs: Record<string, string> = {};
+
+    // 0. Check daily order limit (Max 5 orders / day)
+    if (hasReachedDailyLimit) {
+      errs.limit = `Tài khoản đã đạt giới hạn tối đa ${effectiveMaxDaily} đơn hàng trong ngày hôm nay. Hệ thống sẽ tự động làm mới sau 00:00.`;
+    }
 
     // 1. Tên bắt buộc ít nhất 3 ký tự
     if (!name.trim()) {
@@ -129,7 +171,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     return Object.keys(errs).length === 0;
   };
 
-  const handleSubmitOrder = (e: React.FormEvent) => {
+  const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
 
     // Check if user is logged in first
@@ -140,22 +182,38 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
     if (!validateForm()) return;
 
+    const cleanPhone = phone.replace(/[\s.-]/g, '');
+
+    // Real-time double check of today's order limit (5 orders / day)
+    if (!isAdminUser) {
+      const currentTodayCount = await getTodayOrdersCount(cleanPhone);
+      if (currentTodayCount >= effectiveMaxDaily) {
+        setTodayOrdersCount(currentTodayCount);
+        setErrors({
+          limit: `TÀI KHOẢN ĐÃ ĐẠT GIỚI HẠN!\nBạn đã đặt tối đa ${effectiveMaxDaily} đơn hàng trong ngày hôm nay. Hạn mức sẽ tự động được làm mới sau 00:00 mỗi ngày. Vui lòng quay lại vào ngày mai!`,
+        });
+        return;
+      }
+    }
+
     setIsSubmitting(true);
 
     const randomId = `TIN-${Math.floor(10000 + Math.random() * 90000)}`;
     const now = new Date();
-    const dateStr = `${now.getDate().toString().padStart(2, '0')}/${(now.getMonth() + 1)
-      .toString()
-      .padStart(2, '0')}/${now.getFullYear()} - ${now
-      .getHours()
-      .toString()
-      .padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+    const isoString = now.toISOString();
+    const hours = now.getHours().toString().padStart(2, '0');
+    const minutes = now.getMinutes().toString().padStart(2, '0');
+    const seconds = now.getSeconds().toString().padStart(2, '0');
+    const day = now.getDate().toString().padStart(2, '0');
+    const month = (now.getMonth() + 1).toString().padStart(2, '0');
+    const year = now.getFullYear();
+    const dateStr = `${hours}:${minutes}:${seconds} ngày ${day}/${month}/${year}`;
 
     const newOrder: Order = {
       id: randomId,
-      createdAt: dateStr,
+      createdAt: isoString,
       customerName: name.trim(),
-      customerPhone: phone.replace(/[\s.-]/g, ''),
+      customerPhone: cleanPhone,
       customerEmail: email.trim() || undefined,
       shippingAddress: `${address.trim()}, ${district}, ${city}`,
       city,
@@ -203,54 +261,68 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     }
     markFirstOrderCompleted();
 
-    // Asynchronously persist order to Firebase Firestore
+    // 1. Save to local orders cache for instant rendering
     try {
-      setDoc(doc(db, 'orders', newOrder.id), newOrder).catch((err) => {
-        console.warn('Firestore order sync warning:', err);
-      });
-
-      // Also persist / update customer profile in Firestore
-      if (phone) {
-        const cleanPhone = phone.trim().replace(/[\s.-]/g, '');
-        if (cleanPhone) {
-          setDoc(
-            doc(db, 'customers', cleanPhone),
-            {
-              id: `CUS-${cleanPhone}`,
-              name: name.trim(),
-              phone: cleanPhone,
-              email: email.trim(),
-              address: address.trim(),
-              city: city,
-              district: district,
-              lastOrderAt: new Date().toISOString(),
-              lastOrderId: newOrder.id,
-            },
-            { merge: true }
-          ).catch((err) => console.warn('Customer doc sync:', err));
-        }
-      }
-    } catch (err) {
-      console.warn('Firestore setDoc failed', err);
+      const existingRaw = localStorage.getItem('tingo_orders_storage');
+      const existingList = existingRaw ? JSON.parse(existingRaw) : [];
+      localStorage.setItem('tingo_orders_storage', JSON.stringify([newOrder, ...existingList]));
+    } catch (e) {
+      console.warn('Local order storage note:', e);
     }
 
-    setTimeout(() => {
-      setIsSubmitting(false);
-      setCreatedOrder(newOrder);
-      onOrderSuccess(newOrder);
+    // 2. Persist order to Firebase Firestore & update Customer record
+    try {
+      const cleanOrderPayload = sanitizeFirestoreData(newOrder);
+      await setDoc(doc(db, 'orders', newOrder.id), cleanOrderPayload);
 
-      // Trigger Celebration Confetti
-      try {
-        confetti({
-          particleCount: 80,
-          spread: 70,
-          origin: { y: 0.6 },
-          colors: ['#008874', '#0284c7', '#10b981', '#fbbf24'],
+      // Also persist / update customer profile in Firestore
+      if (cleanPhone) {
+        const customerProfileData = sanitizeFirestoreData({
+          id: `CUS-${cleanPhone}`,
+          name: name.trim(),
+          phone: cleanPhone,
+          email: email.trim() || '',
+          address: address.trim(),
+          city: city,
+          district: district,
+          lastOrderAt: isoString,
+          lastOrderId: newOrder.id,
         });
-      } catch (err) {
-        // Safe fallback
+        await setDoc(
+          doc(db, 'customers', cleanPhone),
+          customerProfileData,
+          { merge: true }
+        );
       }
-    }, 600);
+    } catch (err) {
+      console.error('Firestore order sync error:', err);
+    }
+
+    // 3. Notify Telegram Bot in real-time
+    try {
+      await notifyNewOrder(newOrder);
+    } catch (err) {
+      console.warn('Telegram new order alert warning:', err);
+    }
+
+    // Increment today's count in state
+    setTodayOrdersCount((prev) => prev + 1);
+
+    setIsSubmitting(false);
+    setCreatedOrder(newOrder);
+    onOrderSuccess(newOrder);
+
+    // Trigger Celebration Confetti
+    try {
+      confetti({
+        particleCount: 80,
+        spread: 70,
+        origin: { y: 0.6 },
+        colors: ['#008874', '#0284c7', '#10b981', '#fbbf24'],
+      });
+    } catch (err) {
+      // Safe fallback
+    }
   };
 
   const handleCopyAccount = () => {
@@ -416,6 +488,59 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
                   })}
                 </div>
               </div>
+
+              {/* Daily Order Limit Banner / Status */}
+              <div
+                className={`p-3.5 rounded-2xl border text-xs flex items-start gap-3 transition-all ${
+                  hasReachedDailyLimit
+                    ? 'bg-rose-50/90 border-rose-200 text-rose-800'
+                    : todayOrdersCount >= 3
+                    ? 'bg-amber-50/90 border-amber-200 text-amber-900'
+                    : 'bg-emerald-50/60 border-emerald-200/80 text-emerald-900'
+                }`}
+              >
+                <div
+                  className={`p-1.5 rounded-xl shrink-0 ${
+                    hasReachedDailyLimit
+                      ? 'bg-rose-100 text-rose-700'
+                      : todayOrdersCount >= 3
+                      ? 'bg-amber-100 text-amber-700'
+                      : 'bg-emerald-100 text-[#008874]'
+                  }`}
+                >
+                  <AlertCircle className="w-4 h-4" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2 mb-0.5">
+                    <span className="font-bold">
+                      {hasReachedDailyLimit
+                        ? 'ĐÃ ĐẠT GIỚI HẠN 5 ĐƠN/NGÀY'
+                        : `Hạn Mức Đặt Hàng Hôm Nay: ${todayOrdersCount}/${effectiveMaxDaily} đơn`}
+                    </span>
+                    <span
+                      className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                        hasReachedDailyLimit
+                          ? 'bg-rose-200 text-rose-900'
+                          : 'bg-emerald-200/80 text-emerald-900'
+                      }`}
+                    >
+                      {hasReachedDailyLimit ? 'Hết lượt hôm nay' : `Còn ${Math.max(0, effectiveMaxDaily - todayOrdersCount)} lượt`}
+                    </span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed opacity-90">
+                    {hasReachedDailyLimit
+                      ? 'Tài khoản của bạn đã đạt giới hạn tối đa 5 đơn/ngày. Hệ thống tự động làm mới (reset) sau 00:00 mỗi ngày. Vui lòng quay lại vào ngày mai hoặc liên hệ Hotline 1900 8888.'
+                      : 'Mỗi tài khoản được đặt tối đa 5 đơn hàng/ngày (tự động reset sau 00:00 hàng ngày) để đảm bảo chất lượng phục vụ tốt nhất.'}
+                  </p>
+                </div>
+              </div>
+
+              {errors.limit && (
+                <div className="p-3 bg-rose-50 rounded-xl border border-rose-200 text-xs text-rose-700 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span className="font-medium whitespace-pre-line">{errors.limit}</span>
+                </div>
+              )}
 
               {/* Customer Inputs Grid */}
               <div className="space-y-3.5">
@@ -734,11 +859,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               {/* Submit Order Button */}
               <button
                 type="submit"
-                disabled={isSubmitting}
-                className="w-full py-4 rounded-2xl bg-[#008874] hover:bg-[#007052] active:scale-[0.98] text-white font-bold text-base shadow-lg shadow-emerald-900/15 flex items-center justify-center gap-2 transition-all cursor-pointer"
+                disabled={isSubmitting || hasReachedDailyLimit}
+                className={`w-full py-4 rounded-2xl font-bold text-base flex items-center justify-center gap-2 transition-all cursor-pointer ${
+                  hasReachedDailyLimit
+                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
+                    : 'bg-[#008874] hover:bg-[#007052] active:scale-[0.98] text-white shadow-lg shadow-emerald-900/15'
+                }`}
               >
-                <span>{isSubmitting ? 'Đang gửi đơn hàng...' : 'Xác Nhận Đặt Hàng Ngay'}</span>
-                <ArrowRight className="w-5 h-5" />
+                <span>
+                  {isSubmitting
+                    ? 'Đang gửi đơn hàng...'
+                    : hasReachedDailyLimit
+                    ? 'Đã Đạt Giới Hạn 5 Đơn/Ngày (Reset sau 00:00)'
+                    : 'Xác Nhận Đặt Hàng Ngay'}
+                </span>
+                {!hasReachedDailyLimit && <ArrowRight className="w-5 h-5" />}
               </button>
 
               <div className="text-center text-[11px] text-slate-400 flex items-center justify-center gap-1">

@@ -1,19 +1,37 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { CustomerUser, Voucher } from '../types';
-import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
+import {
+  doc,
+  setDoc,
+  getDoc,
+  updateDoc,
+  onSnapshot,
+  collection,
+  query,
+  where,
+  getDocs,
+} from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { notifyNewRegistration } from '../lib/telegram';
+import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
+import { isCreatedTodayVN } from '../utils/dateFormatter';
 
 const STORAGE_KEY = 'tingo_customer_user_session';
 const ACCOUNTS_CACHE_KEY = 'tingo_registered_customers_cache';
+const BLOCKED_CACHE_KEY = 'tingo_blocked_identifiers_cache';
 
 export const ADMIN_CREDENTIALS = {
   email: 'tingodrink@gmail.com',
   pass: 'tamTu023@',
 };
 
+export const MAX_DAILY_ORDERS_PER_ACCOUNT = 5;
+
 interface CustomerAuthContextType {
   customer: CustomerUser | null;
   isLoggedIn: boolean;
+  maxDailyOrders: number;
+  getTodayOrdersCount: (phone?: string) => Promise<number>;
   registerCustomer: (data: {
     name: string;
     phone: string;
@@ -61,14 +79,56 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [pendingCallback, setPendingCallback] = useState<(() => void) | null>(null);
 
-  // Sync with localStorage
+  // Sync with localStorage & listen for cross-tab or admin invalidation
   useEffect(() => {
     if (customer) {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(customer));
     } else {
       localStorage.removeItem(STORAGE_KEY);
     }
+
+    const handleInvalidation = (e: any) => {
+      const targetPhone = e.detail?.phone;
+      const targetEmail = e.detail?.email;
+      if (
+        customer &&
+        (customer.phone === targetPhone ||
+          (customer.email && customer.email.toLowerCase() === targetEmail?.toLowerCase()) ||
+          !targetPhone)
+      ) {
+        setCustomer(null);
+        localStorage.removeItem(STORAGE_KEY);
+        if (e.detail?.blocked) {
+          alert('⚠️ Thông báo từ Quản Trị TINGO:\nTài khoản của bạn đã bị khóa quyền truy cập.');
+        }
+      }
+    };
+
+    window.addEventListener('tingo-customer-session-cleared', handleInvalidation);
+    return () => window.removeEventListener('tingo-customer-session-cleared', handleInvalidation);
   }, [customer]);
+
+  // Real-time Session Block Guard: If logged-in user gets blocked in Firestore, kick them out immediately
+  useEffect(() => {
+    if (!customer || customer.id === 'ADMIN-TINGO') return;
+
+    try {
+      const unsub = onSnapshot(doc(db, 'customers', customer.phone), (snap) => {
+        if (snap.exists()) {
+          const data = snap.data() as CustomerUser;
+          if (data.isBlocked) {
+            setCustomer(null);
+            localStorage.removeItem(STORAGE_KEY);
+            alert('⚠️ Thông báo từ Quản Trị TINGO:\nTài khoản của bạn đã bị khóa quyền truy cập.');
+          }
+        }
+      });
+
+      return () => unsub();
+    } catch (err) {
+      console.warn('Customer session guard note:', err);
+    }
+  }, [customer?.phone]);
 
   // Helper to get local registered accounts cache
   const getLocalAccounts = (): Record<string, CustomerUser & { password?: string }> => {
@@ -78,6 +138,66 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
     } catch {
       return {};
     }
+  };
+
+  // Helper to get local blocked cache
+  const getLocalBlockedList = (): string[] => {
+    try {
+      const raw = localStorage.getItem(BLOCKED_CACHE_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  // Helper to check if a phone or email is blocked across Firestore & local cache
+  const checkIfBlocked = async (phone: string, email?: string): Promise<{ blocked: boolean; reason?: string }> => {
+    const cleanPhone = phone.trim().replace(/[\s.-]/g, '');
+    const cleanEmail = email?.trim().toLowerCase();
+
+    // 1. Check local blocked cache
+    const localBlocked = getLocalBlockedList();
+    if (cleanPhone && localBlocked.includes(cleanPhone)) {
+      return { blocked: true, reason: 'Số điện thoại này đã bị chặn' };
+    }
+    if (cleanEmail && localBlocked.includes(cleanEmail)) {
+      return { blocked: true, reason: 'Email này đã bị chặn' };
+    }
+
+    // 2. Check Firestore blocked_identifiers
+    try {
+      if (cleanPhone) {
+        const snap = await getDoc(doc(db, 'blocked_identifiers', cleanPhone));
+        if (snap.exists()) {
+          const data = snap.data();
+          return { blocked: true, reason: data.reason || 'Số điện thoại này đã bị chặn' };
+        }
+      }
+      if (cleanEmail) {
+        const encodedEmail = encodeURIComponent(cleanEmail);
+        const snapEmail = await getDoc(doc(db, 'blocked_identifiers', encodedEmail));
+        if (snapEmail.exists()) {
+          const data = snapEmail.data();
+          return { blocked: true, reason: data.reason || 'Email này đã bị chặn' };
+        }
+      }
+    } catch (err) {
+      console.warn('Blocked check firestore notice:', err);
+    }
+
+    // 3. Check customer doc isBlocked status
+    try {
+      if (cleanPhone) {
+        const cusSnap = await getDoc(doc(db, 'customers', cleanPhone));
+        if (cusSnap.exists() && cusSnap.data().isBlocked === true) {
+          return { blocked: true, reason: cusSnap.data().blockedReason || 'Tài khoản đang bị tạm khóa' };
+        }
+      }
+    } catch (err) {
+      console.warn('Customer isBlocked firestore notice:', err);
+    }
+
+    return { blocked: false };
   };
 
   // Helper to update local registered accounts cache
@@ -117,10 +237,28 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       return { success: false, error: 'Mật khẩu phải có ít nhất 6 ký tự để bảo mật' };
     }
 
+    // 0. Check if phone or email is BLOCKED by Admin
+    const blockCheck = await checkIfBlocked(cleanPhone, cleanEmail);
+    if (blockCheck.blocked) {
+      return {
+        success: false,
+        error:
+          'TÀI KHOẢN ĐÃ BỊ KHÓA! Số điện thoại hoặc Email này đã bị quản trị viên chặn quyền đăng ký trên hệ thống TINGO. Vui lòng liên hệ Hotline để được hỗ trợ.',
+      };
+    }
+
     // 1. Check if phone already registered in Firestore or Local Cache
     try {
       const snap = await getDoc(doc(db, 'customers', cleanPhone));
       if (snap.exists()) {
+        const existingData = snap.data();
+        if (existingData.isBlocked) {
+          return {
+            success: false,
+            error:
+              'TÀI KHOẢN ĐÃ BỊ KHÓA! Số điện thoại này đã bị quản trị viên khóa quyền truy cập. Quý khách không thể đăng ký tài khoản mới.',
+          };
+        }
         return {
           success: false,
           error: 'Số điện thoại này đã được đăng ký tài khoản trước đó. Quý khách vui lòng chuyển sang tab Đăng Nhập.',
@@ -137,6 +275,35 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }
     }
 
+    // 2. Strict Email Uniqueness Check: Prevent 1 Gmail from registering multiple accounts!
+    if (cleanEmail) {
+      try {
+        const emailQ = query(collection(db, 'customers'), where('email', '==', cleanEmail));
+        const emailSnap = await getDocs(emailQ);
+        if (!emailSnap.empty) {
+          const conflicting = emailSnap.docs[0].data() as CustomerUser;
+          if (conflicting.phone !== cleanPhone) {
+            return {
+              success: false,
+              error: `Email (${cleanEmail}) đã được liên kết với một tài khoản khác (SĐT: ${conflicting.phone}). Mỗi địa chỉ Gmail/Email chỉ được sử dụng cho duy nhất 1 tài khoản TINGO.`,
+            };
+          }
+        }
+      } catch (err) {
+        console.warn('Firestore email uniqueness check notice:', err);
+        const localAccs = getLocalAccounts();
+        const existingWithEmail = Object.values(localAccs).find(
+          (acc) => acc.email && acc.email.toLowerCase() === cleanEmail && acc.phone !== cleanPhone
+        );
+        if (existingWithEmail) {
+          return {
+            success: false,
+            error: `Email (${cleanEmail}) đã được đăng ký bởi tài khoản khác (SĐT: ${existingWithEmail.phone}). Mỗi địa chỉ Email chỉ được sử dụng cho duy nhất 1 tài khoản TINGO.`,
+          };
+        }
+      }
+    }
+
     const newUser: CustomerUser = {
       id: `CUS-${cleanPhone}`,
       name: data.name.trim(),
@@ -148,6 +315,7 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       freeshipVouchers: 5, // Exactly 5 vouchers for registered account
       isFirstOrder: true,
       createdAt: new Date().toISOString(),
+      isBlocked: false,
     };
 
     const userWithPass = {
@@ -160,13 +328,23 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
     // Save to Firestore
     try {
       const customerDocRef = doc(db, 'customers', cleanPhone);
-      await setDoc(customerDocRef, userWithPass, { merge: true });
+      await setDoc(customerDocRef, sanitizeFirestoreData(userWithPass), { merge: true });
     } catch (err) {
       console.warn('Firestore customer registration sync warning:', err);
     }
 
     // Save to Local Accounts Cache for fast offline verification
     saveLocalAccount(userWithPass);
+
+    // Send Telegram Notification in real-time
+    try {
+      const teleRes = await notifyNewRegistration(newUser);
+      if (teleRes && !teleRes.success) {
+        console.log('Telegram registration notice:', teleRes.error);
+      }
+    } catch (err) {
+      console.warn('Telegram registration alert note:', err);
+    }
 
     setCustomer(newUser);
     setIsAuthModalOpen(false);
@@ -178,6 +356,58 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
 
     return { success: true, user: newUser };
+  };
+
+  /**
+   * Count how many non-cancelled orders this phone placed on today's calendar date (Vietnam time)
+   */
+  const getTodayOrdersCount = async (inputPhone?: string): Promise<number> => {
+    const targetPhone = (inputPhone || customer?.phone || '').trim().replace(/[\s.-]/g, '');
+    if (!targetPhone) return 0;
+
+    // Admin has unlimited quota
+    if (targetPhone === '0900000000' || customer?.id === 'ADMIN-TINGO') {
+      return 0;
+    }
+
+    const countedIds = new Set<string>();
+
+    // 1. Scan Local Storage orders
+    try {
+      const raw = localStorage.getItem('tingo_orders_storage');
+      if (raw) {
+        const list = JSON.parse(raw);
+        if (Array.isArray(list)) {
+          list.forEach((ord: any) => {
+            if (
+              ord.customerPhone === targetPhone &&
+              ord.status !== 'cancelled' &&
+              isCreatedTodayVN(ord.createdAt)
+            ) {
+              countedIds.add(ord.id);
+            }
+          });
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    // 2. Scan Firestore orders
+    try {
+      const q = query(collection(db, 'orders'), where('customerPhone', '==', targetPhone));
+      const snap = await getDocs(q);
+      snap.forEach((d) => {
+        const ord = d.data();
+        if (ord.status !== 'cancelled' && isCreatedTodayVN(ord.createdAt)) {
+          countedIds.add(d.id);
+        }
+      });
+    } catch (err) {
+      console.warn('Count today orders error:', err);
+    }
+
+    return countedIds.size;
   };
 
   const loginWithCredentials = async (
@@ -227,23 +457,49 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       return { success: true, isAdmin: true, user: adminUser };
     }
 
-    // 2. Lookup registered Customer by Phone or Email
+    // 2. Immediate Block Check on input identifier before anything else
     const cleanPhone = cleanId.replace(/[\s.-]/g, '');
+    const isPhone = cleanPhone.length === 10 && /^\d+$/.test(cleanPhone);
+    const isEmail = cleanId.includes('@');
+
+    const directBlockCheck = await checkIfBlocked(isPhone ? cleanPhone : '', isEmail ? cleanIdLower : undefined);
+    if (directBlockCheck.blocked) {
+      return {
+        success: false,
+        error:
+          'TÀI KHOẢN ĐÃ BỊ KHÓA! Quản trị viên TINGO đã khóa quyền truy cập đối với số điện thoại/email này. Quý khách vui lòng liên hệ Hotline để được hỗ trợ mở khóa.',
+      };
+    }
+
+    // 3. Lookup registered Customer in Firestore & Local Cache
     let matchedCustomer: (CustomerUser & { password?: string }) | null = null;
 
     // A. Check Firestore by phone ID
-    if (cleanPhone.length === 10 && /^\d+$/.test(cleanPhone)) {
+    if (isPhone) {
       try {
         const snap = await getDoc(doc(db, 'customers', cleanPhone));
         if (snap.exists()) {
           matchedCustomer = snap.data() as CustomerUser & { password?: string };
         }
       } catch (err) {
-        console.warn('Firestore customer lookup notice:', err);
+        console.warn('Firestore customer lookup by phone error:', err);
       }
     }
 
-    // B. Check Local Accounts Cache if not retrieved from Firestore
+    // B. Check Firestore by email query
+    if (!matchedCustomer && isEmail) {
+      try {
+        const q = query(collection(db, 'customers'), where('email', '==', cleanIdLower));
+        const querySnap = await getDocs(q);
+        if (!querySnap.empty) {
+          matchedCustomer = querySnap.docs[0].data() as CustomerUser & { password?: string };
+        }
+      } catch (err) {
+        console.warn('Firestore customer lookup by email error:', err);
+      }
+    }
+
+    // C. Check Local Accounts Cache if not retrieved from Firestore
     if (!matchedCustomer) {
       const localAccs = getLocalAccounts();
       if (localAccs[cleanPhone]) {
@@ -253,7 +509,7 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       }
     }
 
-    // 3. Strict Rule: If NOT registered, STRICTLY DENY access
+    // 4. Strict Rule: If NOT registered, STRICTLY DENY access
     if (!matchedCustomer) {
       return {
         success: false,
@@ -262,7 +518,25 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       };
     }
 
-    // 4. Strict Rule: Check Password
+    // 5. Strict Block Check: If user is marked as blocked, reject login
+    if (matchedCustomer.isBlocked) {
+      return {
+        success: false,
+        error:
+          'TÀI KHOẢN ĐÃ BỊ KHÓA! Quản trị viên đã chặn số điện thoại/email này. Quý khách không thể đăng nhập. Vui lòng liên hệ Hotline CSKH TINGO.',
+      };
+    }
+
+    const blockCheck = await checkIfBlocked(matchedCustomer.phone, matchedCustomer.email);
+    if (blockCheck.blocked) {
+      return {
+        success: false,
+        error:
+          'TÀI KHOẢN ĐÃ BỊ KHÓA! Số điện thoại hoặc Email này đã bị chặn quyền truy cập. Quý khách vui lòng liên hệ quản trị viên TINGO.',
+      };
+    }
+
+    // 6. Strict Rule: Check Password
     if (matchedCustomer.password && matchedCustomer.password !== cleanPass) {
       return {
         success: false,
@@ -450,6 +724,8 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       value={{
         customer,
         isLoggedIn: !!customer,
+        maxDailyOrders: MAX_DAILY_ORDERS_PER_ACCOUNT,
+        getTodayOrdersCount,
         registerCustomer,
         loginWithCredentials,
         logoutCustomer,

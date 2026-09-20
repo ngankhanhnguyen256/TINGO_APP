@@ -9,6 +9,14 @@ export interface CustomerUser {
   freeshipVouchers: number; // Defaults to 5
   isFirstOrder: boolean; // True for first-time buyer (gets 20k welcome coupon)
   createdAt: string;
+  isBlocked?: boolean; // When blocked, cannot login or register
+  blockedAt?: string;
+  blockedReason?: string;
+  lastLoginAt?: string;
+  ordersCount?: number;
+  totalSpent?: number;
+  lastOrderAt?: string;
+  lastOrderId?: string;
 }
 
 export interface Voucher {
