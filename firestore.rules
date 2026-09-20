@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Allow reading and creating orders for store customers & admins
+    match /orders/{orderId} {
+      allow read, write: if true;
+    }
+
+    // Customers collection for account synchronization
+    match /customers/{customerId} {
+      allow read, write: if true;
+    }
+
+    // Landing page visual config & product catalog sync
+    match /landing_config/{docId} {
+      allow read, write: if true;
+    }
+
+    // Settings collection for landing page configuration & real-time builder persistence
+    match /settings/{settingId} {
+      allow read, write: if true;
+    }
+  }
+}
+

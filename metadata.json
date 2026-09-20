@@ -1,0 +1,6 @@
+{
+  "name": "TINGO - Dinh Dưỡng Sống Từ Thiên Nhiên",
+  "description": "Cửa hàng đồ uống & dinh dưỡng sạch hàng đầu Việt Nam - TINGO Organic & Sức Khoẻ Tự Nhiên.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

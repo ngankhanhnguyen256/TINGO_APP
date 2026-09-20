@@ -1,0 +1,58 @@
+{
+  "entities": {
+    "Order": {
+      "title": "Order",
+      "description": "Store customer order record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "totalAmount": { "type": "number" },
+        "status": { "type": "string" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "customerName", "customerPhone", "totalAmount", "status"]
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Registered customer profile and loyalty",
+      "type": "object",
+      "properties": {
+        "phone": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "freeShipCount": { "type": "number" }
+      },
+      "required": ["phone", "name"]
+    },
+    "LandingConfig": {
+      "title": "LandingConfig",
+      "description": "Visual builder landing page configuration",
+      "type": "object",
+      "properties": {
+        "configJson": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Customer order records"
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Customer accounts and shipping details"
+    },
+    "/settings/{settingId}": {
+      "schema": "LandingConfig",
+      "description": "Landing page configuration and visual settings"
+    },
+    "/landing_config/{docId}": {
+      "schema": "LandingConfig",
+      "description": "Landing page configuration and backup"
+    }
+  }
+}
