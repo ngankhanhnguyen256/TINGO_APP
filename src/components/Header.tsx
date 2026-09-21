@@ -4,6 +4,7 @@ import { CartItem } from '../types';
 import { useVisualEditor } from '../context/VisualEditorContext';
 import { useCustomerAuth } from '../context/CustomerAuthContext';
 import { LogoEditorModal } from './admin/LogoEditorModal';
+import { compressImage } from '../lib/storageHelper';
 
 interface HeaderProps {
   cartItems: CartItem[];
@@ -74,16 +75,27 @@ export const Header: React.FC<HeaderProps> = ({
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const dataUrl = event.target?.result as string;
       if (dataUrl) {
-        updateLogo({
-          type: 'image',
-          imageUrl: dataUrl,
-          text: logo.text || 'TINGO',
-          tagline: logo.tagline,
-          height: logo.height || 44,
-        });
+        try {
+          const compressed = await compressImage(dataUrl, 600, 0.85);
+          updateLogo({
+            type: 'image',
+            imageUrl: compressed || dataUrl,
+            text: logo.text || 'TINGO',
+            tagline: logo.tagline,
+            height: logo.height || 44,
+          });
+        } catch {
+          updateLogo({
+            type: 'image',
+            imageUrl: dataUrl,
+            text: logo.text || 'TINGO',
+            tagline: logo.tagline,
+            height: logo.height || 44,
+          });
+        }
       }
     };
     reader.readAsDataURL(file);

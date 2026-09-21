@@ -20,7 +20,8 @@ import {
 } from 'lucide-react';
 import { useVisualEditor } from '../../context/VisualEditorContext';
 import { VerticalVideoItem } from '../../types';
-import { saveVideoBlob } from '../../lib/storageHelper';
+import { saveVideoBlob, compressImage } from '../../lib/storageHelper';
+import { uploadVideoToCloud } from '../../lib/videoCloudStorage';
 
 interface VerticalVideoEditorModalProps {
   isOpen: boolean;
@@ -169,18 +170,30 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
       }
     };
 
-    // Read video as Base64 Data URL for standalone playback
+    // Read video as Base64 Data URL for standalone playback and cloud upload
     const reader = new FileReader();
-    reader.onload = (event) => {
+    reader.onload = async (event) => {
       const result = event.target?.result as string;
       if (result) {
         const itemId = editingItemId || `video-custom-${Date.now()}`;
-        saveVideoBlob(itemId, result);
-        setFormData((prev) => ({
-          ...prev,
-          videoUrl: result,
-          title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
-        }));
+        try {
+          const cloudUrl = await uploadVideoToCloud(itemId, result, {
+            title: formData.title || file.name.replace(/\.[^/.]+$/, ''),
+            author: formData.author || 'Khách hàng TINGO',
+          });
+          setFormData((prev) => ({
+            ...prev,
+            videoUrl: cloudUrl || result,
+            title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
+          }));
+        } catch {
+          await saveVideoBlob(itemId, result);
+          setFormData((prev) => ({
+            ...prev,
+            videoUrl: result,
+            title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
+          }));
+        }
       }
       setIsUploadingVideo(false);
     };

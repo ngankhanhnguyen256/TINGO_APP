@@ -22,6 +22,7 @@ import { Product, VerticalVideoItem } from '../types';
 import { VerticalVideoEditorModal } from './admin/VerticalVideoEditorModal';
 import { EditableElement } from './admin/EditableElement';
 import { loadVideoBlob } from '../lib/storageHelper';
+import { loadVideoFromCloudOrLocal } from '../lib/videoCloudStorage';
 
 interface VerticalVideoCarouselSectionProps {
   onAddToCart?: (product: Product, quantity?: number) => void;
@@ -65,16 +66,21 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
 
   const items = sectionData.items || [];
 
-  // Load any IndexedDB blobs for custom uploaded videos
+  // Load video blobs and cloud storage chunks for custom uploaded videos across all devices
   useEffect(() => {
     let isMounted = true;
     const fetchBlobUrls = async () => {
       const resolved: Record<string, string> = {};
       for (const item of items) {
-        if (!item.videoUrl || item.videoUrl.startsWith('blob:')) {
-          const blobData = await loadVideoBlob(item.id);
-          if (blobData && isMounted) {
-            resolved[item.id] = blobData;
+        const urlOrId = item.videoUrl || item.id;
+        if (urlOrId) {
+          try {
+            const resolvedUrl = await loadVideoFromCloudOrLocal(urlOrId);
+            if (resolvedUrl && isMounted) {
+              resolved[item.id] = resolvedUrl;
+            }
+          } catch {
+            // fallback to direct URL
           }
         }
       }

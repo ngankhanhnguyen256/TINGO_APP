@@ -1,4 +1,5 @@
 import { LandingPageConfig } from '../types';
+import { uploadVideoToCloud } from './videoCloudStorage';
 
 const DB_NAME = 'tingo_store_db';
 const DB_VERSION = 2;
@@ -189,6 +190,17 @@ export async function sanitizeConfigImages(config: LandingPageConfig): Promise<L
     return imgStr;
   };
 
+  // 1. Sanitize Logo Image
+  if (newConfig.logo?.imageUrl) {
+    if (newConfig.logo.imageUrl.startsWith('data:image/') && newConfig.logo.imageUrl.length > 50000) {
+      try {
+        newConfig.logo.imageUrl = await compressImage(newConfig.logo.imageUrl, 500, 250, 0.85);
+      } catch {
+        // keep existing
+      }
+    }
+  }
+
   if (Array.isArray(newConfig.hero?.slides)) {
     for (const slide of newConfig.hero.slides) {
       if (slide.imageKey) {
@@ -237,9 +249,18 @@ export async function sanitizeConfigImages(config: LandingPageConfig): Promise<L
       if (v.authorAvatar) {
         v.authorAvatar = (await sanitizeImageStr(v.authorAvatar)) || v.authorAvatar;
       }
-      // If videoUrl is a huge data URL, ensure it is safely stored in IndexedDB
+      // If videoUrl is a huge data URL, upload to cloud storage chunks and replace with reference
       if (v.videoUrl && v.videoUrl.startsWith('data:video/')) {
-        await saveVideoBlob(v.id, v.videoUrl);
+        try {
+          const cloudRef = await uploadVideoToCloud(v.id, v.videoUrl, {
+            title: v.title,
+            author: v.authorName,
+          });
+          v.videoUrl = cloudRef;
+        } catch {
+          await saveVideoBlob(v.id, v.videoUrl);
+          v.videoUrl = `cloud-video://${v.id}`;
+        }
       }
     }
   }
