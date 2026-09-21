@@ -163,15 +163,15 @@ const ProductCardItem: React.FC<{
       >
         <div
           onClick={handleCardClick}
-          className={`h-full bg-white rounded-2xl sm:rounded-3xl border overflow-hidden shadow-xs hover:shadow-xl hover:shadow-emerald-950/5 transition-all duration-300 flex flex-col group cursor-pointer ${
+          className={`h-full p-3 sm:p-3.5 md:p-4 bg-[#f8faf9] rounded-3xl border shadow-xs hover:shadow-xl hover:shadow-emerald-950/5 transition-all duration-300 flex flex-col justify-between group cursor-pointer ${
             isFirst
-              ? 'border-emerald-400/80 ring-1 ring-emerald-400/40 shadow-sm'
+              ? 'border-emerald-400/90 ring-1 ring-emerald-400/40 shadow-sm'
               : 'border-slate-200/90 hover:border-emerald-400'
           }`}
         >
-          {/* Product Image Stage (Aspect 4:3 Container - tràn viền rectangular full-bleed matching screenshot) */}
-          <div className="relative aspect-[4/3] w-full bg-slate-100/60 flex items-center justify-center overflow-hidden">
-            <ProductVisual imageKey={p.image} size="md" fit="cover" className="h-full w-full" />
+          {/* Product Image Stage (Aspect 4:3 Container - bo viền rounded-2xl đồng bộ đúng như ảnh modal edit) */}
+          <div className="relative aspect-[4/3] w-full rounded-2xl overflow-hidden border border-slate-200/80 shadow-xs bg-slate-100/70 flex items-center justify-center">
+            <ProductVisual imageKey={p.image} size="md" fit="cover" className="h-full w-full object-cover" />
 
             {/* Top Left Badges */}
             <div className="absolute top-2 left-2 sm:top-2.5 sm:left-2.5 flex flex-col gap-1 z-10">
@@ -188,15 +188,23 @@ const ProductCardItem: React.FC<{
               )}
             </div>
 
-            {/* Quick View Overlay (Desktop) */}
+            {/* Top Right: LƯỢT BÁN HIỆN 24/24 */}
+            <div className="absolute top-2 right-2 sm:top-2.5 sm:right-2.5 z-10">
+              <span className="inline-flex items-center gap-1 text-[9px] sm:text-[10.5px] font-bold px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full bg-slate-900/85 backdrop-blur-md text-emerald-300 shadow-xs border border-emerald-500/30">
+                <Flame className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-amber-400 fill-amber-400 shrink-0" />
+                <span>Đã bán {formattedSold}</span>
+              </span>
+            </div>
+
+            {/* Quick View Overlay (Desktop Hover) */}
             <div className="hidden sm:flex absolute inset-0 bg-slate-900/20 opacity-0 group-hover:opacity-100 transition-opacity items-center justify-center gap-1.5 text-white text-xs font-bold backdrop-blur-[1px]">
               <Eye className="w-4 h-4" />
               <span>Xem chi tiết</span>
             </div>
           </div>
 
-          {/* Card Body */}
-          <div className="p-3 sm:p-5 flex flex-col justify-between flex-1 space-y-2 sm:space-y-3">
+          {/* Bottom Info Box (Trắng bo tròn 2xl độc lập như hình demo) */}
+          <div className="mt-2.5 sm:mt-3 p-3 sm:p-4 bg-white rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between flex-1 space-y-2 sm:space-y-3">
             <div>
               {/* Category tag & Rating */}
               <div className="flex items-center justify-between text-xs text-slate-400 mb-1">

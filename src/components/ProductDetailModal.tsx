@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X, ShoppingBag, ArrowRight, Star, ShieldCheck, CheckCircle2, Sparkles, Heart } from 'lucide-react';
 import { Product } from '../types';
 import { ProductVisual } from './ProductVisual';
+import { useProductSold } from '../utils/productStatsTracker';
 
 interface ProductDetailModalProps {
   product: Product | null;
@@ -18,6 +19,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 }) => {
   const [qty, setQty] = useState(1);
   const [activeTab, setActiveTab] = useState<'desc' | 'ingredients' | 'usage'>('desc');
+  const { formattedSold } = useProductSold(product?.id || '', product?.soldCount || 100);
 
   if (!product) return null;
 
@@ -62,7 +64,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 {product.name}
               </h2>
 
-              <div className="flex items-center gap-3 mt-2">
+              <div className="flex flex-wrap items-center gap-3 mt-2">
                 <div className="flex items-center text-amber-400">
                   {[...Array(5)].map((_, i) => (
                     <Star key={i} className="w-4 h-4 fill-amber-400" />
@@ -73,7 +75,11 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                 </div>
                 <span className="text-xs text-slate-400">|</span>
                 <span className="text-xs text-slate-500 font-medium">
-                  {product.reviewsCount} Đánh giá đã xác thực
+                  {product.reviewsCount} Đánh giá
+                </span>
+                <span className="text-xs text-slate-400">|</span>
+                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                  Đã bán {formattedSold}
                 </span>
               </div>
             </div>

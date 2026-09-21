@@ -21,10 +21,21 @@ import { useVisualEditor } from '../context/VisualEditorContext';
 import { Product, VerticalVideoItem } from '../types';
 import { VerticalVideoEditorModal } from './admin/VerticalVideoEditorModal';
 import { EditableElement } from './admin/EditableElement';
+import { loadVideoBlob } from '../lib/storageHelper';
 
 interface VerticalVideoCarouselSectionProps {
   onAddToCart?: (product: Product, quantity?: number) => void;
   onSelectProduct?: (product: Product) => void;
+}
+
+// Helper to convert YouTube URL to embed URL
+function getYouTubeEmbedUrl(url: string): string | null {
+  if (!url) return null;
+  const ytMatch = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
+  if (ytMatch && ytMatch[1]) {
+    return `https://www.youtube-nocookie.com/embed/${ytMatch[1]}?autoplay=1&playsinline=1&rel=0&modestbranding=1`;
+  }
+  return null;
 }
 
 export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSectionProps> = ({
@@ -38,6 +49,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
   const [muted, setMuted] = useState<boolean>(true);
   const [likedMap, setLikedMap] = useState<Record<string, boolean>>({});
   const [videoLoadedMap, setVideoLoadedMap] = useState<Record<string, boolean>>({});
+  const [resolvedVideoUrls, setResolvedVideoUrls] = useState<Record<string, string>>({});
 
   const carouselRef = useRef<HTMLDivElement>(null);
   const videoRefs = useRef<Record<string, HTMLVideoElement | null>>({});
@@ -53,6 +65,29 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
 
   const items = sectionData.items || [];
 
+  // Load any IndexedDB blobs for custom uploaded videos
+  useEffect(() => {
+    let isMounted = true;
+    const fetchBlobUrls = async () => {
+      const resolved: Record<string, string> = {};
+      for (const item of items) {
+        if (!item.videoUrl || item.videoUrl.startsWith('blob:')) {
+          const blobData = await loadVideoBlob(item.id);
+          if (blobData && isMounted) {
+            resolved[item.id] = blobData;
+          }
+        }
+      }
+      if (isMounted && Object.keys(resolved).length > 0) {
+        setResolvedVideoUrls((prev) => ({ ...prev, ...resolved }));
+      }
+    };
+    fetchBlobUrls();
+    return () => {
+      isMounted = false;
+    };
+  }, [items]);
+
   const scroll = (direction: 'left' | 'right') => {
     if (carouselRef.current) {
       const scrollAmount = direction === 'left' ? -320 : 320;
@@ -60,12 +95,21 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
     }
   };
 
-  const togglePlay = (id: string) => {
+  const togglePlay = (id: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const item = items.find((v) => v.id === id);
+    if (!item) return;
+
+    // Check if it's a YouTube link -> open in modal directly
+    const ytEmbed = getYouTubeEmbedUrl(item.videoUrl);
+    if (ytEmbed) {
+      setActiveModalVideo(item);
+      return;
+    }
+
     const videoEl = videoRefs.current[id];
     if (!videoEl) {
-      // If direct video element not ready, open in modal
-      const item = items.find((v) => v.id === id);
-      if (item) setActiveModalVideo(item);
+      setActiveModalVideo(item);
       return;
     }
 
@@ -80,7 +124,6 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
         }
       });
 
-      // Always try playing muted first to satisfy browser autoplay policy
       videoEl.muted = muted;
       const playPromise = videoEl.play();
       if (playPromise !== undefined) {
@@ -89,15 +132,17 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
             setPlayingVideoId(id);
           })
           .catch(() => {
+            // If autoplay policy blocks unmuted or inline, retry with muted or launch modal
             videoEl.muted = true;
             setMuted(true);
-            videoEl.play().then(() => {
-              setPlayingVideoId(id);
-            }).catch(() => {
-              // Open modal player as seamless fallback
-              const item = items.find((v) => v.id === id);
-              if (item) setActiveModalVideo(item);
-            });
+            videoEl
+              .play()
+              .then(() => {
+                setPlayingVideoId(id);
+              })
+              .catch(() => {
+                setActiveModalVideo(item);
+              });
           });
       }
     }
@@ -105,7 +150,6 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
 
   const openVideoModal = (e: React.MouseEvent, item: VerticalVideoItem) => {
     e.stopPropagation();
-    // Pause inline video
     if (playingVideoId) {
       const el = videoRefs.current[playingVideoId];
       if (el) el.pause();
@@ -237,12 +281,13 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
           {items.map((item) => {
             const isPlaying = playingVideoId === item.id;
             const isLiked = likedMap[item.id];
-            const isVideoLoaded = videoLoadedMap[item.id];
+            const effectiveVideoUrl = resolvedVideoUrls[item.id] || item.videoUrl;
+            const isYouTube = !!getYouTubeEmbedUrl(effectiveVideoUrl);
 
             return (
               <div
                 key={item.id}
-                onClick={() => togglePlay(item.id)}
+                onClick={(e) => togglePlay(item.id, e)}
                 className="snap-start shrink-0 w-[240px] sm:w-[280px] md:w-[300px] aspect-[9/16] rounded-3xl bg-slate-900 relative overflow-hidden shadow-xl hover:shadow-2xl transition-all duration-300 group cursor-pointer border border-emerald-900/30 select-none"
               >
                 {/* 1. Underlying Crisp Thumbnail Poster Layer (Guarantees card is NEVER pitch black) */}
@@ -253,7 +298,6 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
                     referrerPolicy="no-referrer"
                     onError={(e) => {
-                      // Fallback image placeholder
                       (e.target as HTMLImageElement).src =
                         'https://images.unsplash.com/photo-1556911073-38141963c9e0?auto=format&fit=crop&w=600&q=80';
                     }}
@@ -261,26 +305,35 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                 )}
 
                 {/* 2. Video Player Element */}
-                <video
-                  ref={(el) => {
-                    videoRefs.current[item.id] = el;
-                  }}
-                  src={item.videoUrl}
-                  poster={item.thumbnailUrl}
-                  playsInline
-                  loop
-                  muted={muted}
-                  preload="metadata"
-                  onLoadedData={() => {
-                    setVideoLoadedMap((prev) => ({ ...prev, [item.id]: true }));
-                  }}
-                  onError={() => {
-                    console.warn(`Video ${item.id} load notice`);
-                  }}
-                  className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
-                    isPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'
-                  }`}
-                />
+                {!isYouTube ? (
+                  <video
+                    ref={(el) => {
+                      videoRefs.current[item.id] = el;
+                    }}
+                    src={effectiveVideoUrl}
+                    poster={item.thumbnailUrl}
+                    playsInline
+                    loop
+                    muted={muted}
+                    preload="auto"
+                    crossOrigin="anonymous"
+                    onLoadedData={() => {
+                      setVideoLoadedMap((prev) => ({ ...prev, [item.id]: true }));
+                    }}
+                    onError={() => {
+                      console.warn(`Video ${item.id} fallback note`);
+                    }}
+                    className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
+                      isPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'
+                    }`}
+                  />
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
+                    <span className="text-[10px] text-white/80 bg-black/60 px-2 py-1 rounded-full">
+                      YouTube Reel
+                    </span>
+                  </div>
+                )}
 
                 {/* 3. Dark Gradients Overlay for legibility */}
                 <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/25 to-black/40 pointer-events-none" />
@@ -307,7 +360,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                       <Maximize2 className="w-3.5 h-3.5" />
                     </button>
 
-                    {isPlaying && (
+                    {isPlaying && !isYouTube && (
                       <button
                         onClick={toggleMute}
                         className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer"
@@ -419,108 +472,127 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
       </div>
 
       {/* Fullscreen Video Reel Viewer Modal (Popup Watch Mode) */}
-      {activeModalVideo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
-          <div className="relative w-full max-w-md aspect-[9/16] max-h-[92vh] rounded-3xl bg-black overflow-hidden shadow-2xl border border-white/10 flex flex-col justify-between">
-            
-            {/* Top Bar */}
-            <div className="absolute top-4 left-4 right-4 z-20 flex items-center justify-between text-white">
-              <div className="flex items-center gap-2">
-                <span className="px-3 py-1 rounded-full bg-emerald-600 text-white text-xs font-bold">
-                  {activeModalVideo.badge || 'TINGO Reel'}
-                </span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={toggleMute}
-                  className="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center cursor-pointer"
-                >
-                  {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
-                </button>
-                <button
-                  onClick={() => setActiveModalVideo(null)}
-                  className="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center cursor-pointer"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
+      {activeModalVideo && (() => {
+        const modalEffectiveUrl = resolvedVideoUrls[activeModalVideo.id] || activeModalVideo.videoUrl;
+        const ytEmbed = getYouTubeEmbedUrl(modalEffectiveUrl);
 
-            {/* Video Player */}
-            <div className="relative w-full h-full flex items-center justify-center bg-black">
-              {activeModalVideo.thumbnailUrl && (
-                <img
-                  src={activeModalVideo.thumbnailUrl}
-                  alt={activeModalVideo.title}
-                  className="absolute inset-0 w-full h-full object-cover"
-                  referrerPolicy="no-referrer"
-                />
-              )}
-              <video
-                ref={modalVideoRef}
-                src={activeModalVideo.videoUrl}
-                poster={activeModalVideo.thumbnailUrl}
-                autoPlay
-                playsInline
-                loop
-                muted={muted}
-                controls
-                className="relative z-10 w-full h-full object-contain"
-              />
-            </div>
-
-            {/* Bottom Floating Navigation & Product Tag */}
-            <div className="absolute bottom-4 left-4 right-4 z-20 space-y-3 text-white">
-              <div>
-                <p className="text-xs font-bold text-emerald-300">@{activeModalVideo.author}</p>
-                <h3 className="text-sm font-bold mt-0.5 line-clamp-2">{activeModalVideo.title}</h3>
-              </div>
-
-              {activeModalVideo.linkedProductId && (
-                <div
-                  onClick={(e) => {
-                    handleProductClick(e, activeModalVideo.linkedProductId);
-                    setActiveModalVideo(null);
-                  }}
-                  className="p-2.5 rounded-2xl bg-white/20 hover:bg-white/30 backdrop-blur-md border border-white/30 flex items-center justify-between cursor-pointer"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <ShoppingBag className="w-4 h-4 text-emerald-300 shrink-0" />
-                    <div className="min-w-0">
-                      <p className="text-xs font-bold text-white truncate">{activeModalVideo.linkedProductName}</p>
-                      {activeModalVideo.linkedProductPrice ? (
-                        <p className="text-xs font-bold text-emerald-300">
-                          {activeModalVideo.linkedProductPrice.toLocaleString('vi-VN')}đ
-                        </p>
-                      ) : null}
-                    </div>
-                  </div>
-                  <span className="px-3 py-1 rounded-full bg-[#008874] text-white text-xs font-bold shrink-0">
-                    Mua Ngay
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
+            <div className="relative w-full max-w-md aspect-[9/16] max-h-[92vh] rounded-3xl bg-black overflow-hidden shadow-2xl border border-white/10 flex flex-col justify-between">
+              
+              {/* Top Bar */}
+              <div className="absolute top-4 left-4 right-4 z-20 flex items-center justify-between text-white">
+                <div className="flex items-center gap-2">
+                  <span className="px-3 py-1 rounded-full bg-emerald-600 text-white text-xs font-bold">
+                    {activeModalVideo.badge || 'TINGO Reel'}
                   </span>
                 </div>
-              )}
-
-              {/* Next/Prev Reel Nav Buttons */}
-              <div className="flex items-center justify-between pt-1">
-                <button
-                  onClick={handlePrevModalVideo}
-                  className="px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-xs font-bold flex items-center gap-1 cursor-pointer"
-                >
-                  <ChevronLeft className="w-4 h-4" /> Video Trước
-                </button>
-                <button
-                  onClick={handleNextModalVideo}
-                  className="px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-xs font-bold flex items-center gap-1 cursor-pointer"
-                >
-                  Video Kế Tiếp <ChevronRight className="w-4 h-4" />
-                </button>
+                <div className="flex items-center gap-2">
+                  {!ytEmbed && (
+                    <button
+                      onClick={toggleMute}
+                      className="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center cursor-pointer"
+                    >
+                      {muted ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setActiveModalVideo(null)}
+                    className="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
-            </div>
 
+              {/* Video Player */}
+              <div className="relative w-full h-full flex items-center justify-center bg-black">
+                {activeModalVideo.thumbnailUrl && (
+                  <img
+                    src={activeModalVideo.thumbnailUrl}
+                    alt={activeModalVideo.title}
+                    className="absolute inset-0 w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                )}
+                {ytEmbed ? (
+                  <iframe
+                    src={ytEmbed}
+                    title={activeModalVideo.title}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                    className="relative z-10 w-full h-full border-0"
+                  />
+                ) : (
+                  <video
+                    ref={modalVideoRef}
+                    src={modalEffectiveUrl}
+                    poster={activeModalVideo.thumbnailUrl}
+                    autoPlay
+                    playsInline
+                    loop
+                    muted={muted}
+                    controls
+                    preload="auto"
+                    crossOrigin="anonymous"
+                    className="relative z-10 w-full h-full object-contain"
+                  />
+                )}
+              </div>
+
+              {/* Bottom Floating Navigation & Product Tag */}
+              <div className="absolute bottom-4 left-4 right-4 z-20 space-y-3 text-white">
+                <div>
+                  <p className="text-xs font-bold text-emerald-300">@{activeModalVideo.author}</p>
+                  <h3 className="text-sm font-bold mt-0.5 line-clamp-2">{activeModalVideo.title}</h3>
+                </div>
+
+                {activeModalVideo.linkedProductId && (
+                  <div
+                    onClick={(e) => {
+                      handleProductClick(e, activeModalVideo.linkedProductId);
+                      setActiveModalVideo(null);
+                    }}
+                    className="p-2.5 rounded-2xl bg-white/20 hover:bg-white/30 backdrop-blur-md border border-white/30 flex items-center justify-between cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <ShoppingBag className="w-4 h-4 text-emerald-300 shrink-0" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-white truncate">{activeModalVideo.linkedProductName}</p>
+                        {activeModalVideo.linkedProductPrice ? (
+                          <p className="text-xs font-bold text-emerald-300">
+                            {activeModalVideo.linkedProductPrice.toLocaleString('vi-VN')}đ
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                    <span className="px-3 py-1 rounded-full bg-[#008874] text-white text-xs font-bold shrink-0">
+                      Mua Ngay
+                    </span>
+                  </div>
+                )}
+
+                {/* Next/Prev Reel Nav Buttons */}
+                <div className="flex items-center justify-between pt-1">
+                  <button
+                    onClick={handlePrevModalVideo}
+                    className="px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <ChevronLeft className="w-4 h-4" /> Video Trước
+                  </button>
+                  <button
+                    onClick={handleNextModalVideo}
+                    className="px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    Video Kế Tiếp <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Admin Video Editor Modal */}
       <VerticalVideoEditorModal
