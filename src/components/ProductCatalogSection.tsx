@@ -169,9 +169,9 @@ const ProductCardItem: React.FC<{
               : 'border-slate-200/90 hover:border-emerald-400'
           }`}
         >
-          {/* Product Image Stage (Aspect Square Container - fits perfectly without distortion) */}
-          <div className="relative aspect-square w-full p-2 sm:p-3 bg-[#fbfdfc] flex items-center justify-center overflow-hidden border-b border-slate-100">
-            <ProductVisual imageKey={p.image} size="md" fit="contain" className="h-full w-full" />
+          {/* Product Image Stage (Aspect Square Container - tràn viền full-bleed) */}
+          <div className="relative aspect-square w-full bg-slate-100/80 flex items-center justify-center overflow-hidden">
+            <ProductVisual imageKey={p.image} size="md" fit="cover" className="h-full w-full" />
 
             {/* Top Left Badges */}
             <div className="absolute top-2 left-2 sm:top-2.5 sm:left-2.5 flex flex-col gap-1 z-10">

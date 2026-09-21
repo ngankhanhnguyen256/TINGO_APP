@@ -223,6 +223,9 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
           try {
             const parsedIdb = JSON.parse(idbSaved);
             if (parsedIdb?.hero && Array.isArray(parsedIdb?.products)) {
+              if (parsedIdb.customBlocks) {
+                parsedIdb.customBlocks = parsedIdb.customBlocks.filter((b: any) => b && b.type !== 'faq');
+              }
               setConfig((prev) => ({ ...prev, ...parsedIdb }));
             }
           } catch {
@@ -256,7 +259,8 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
                   testimonials: cloudConfig.testimonials && cloudConfig.testimonials.length > 0 ? cloudConfig.testimonials : DEFAULT_LANDING_CONFIG.testimonials,
                   articles: cloudConfig.articles && cloudConfig.articles.length > 0 ? cloudConfig.articles : DEFAULT_LANDING_CONFIG.articles,
                   certifications: cloudConfig.certifications && cloudConfig.certifications.length > 0 ? cloudConfig.certifications : DEFAULT_LANDING_CONFIG.certifications,
-                  customBlocks: cloudConfig.customBlocks || [],
+                  verticalVideos: cloudConfig.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos,
+                  customBlocks: (cloudConfig.customBlocks || []).filter((b: any) => b && b.type !== 'faq'),
                 };
                 setConfig(merged);
                 setLastSavedConfigJson(JSON.stringify(merged));

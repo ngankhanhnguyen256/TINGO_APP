@@ -148,18 +148,20 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </div>
 
-          {/* Direct "Đổi Logo / Tải Ảnh" button - easily visible and accessible */}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setLogoModalOpen(true);
-            }}
-            title="Đổi Logo / Tải ảnh từ thiết bị"
-            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-100/90 hover:bg-[#008874] text-emerald-800 hover:text-white text-[11px] font-bold transition-all shadow-xs border border-emerald-200 cursor-pointer"
-          >
-            <Camera className="w-3 h-3" />
-            <span className="hidden xs:inline">Đổi Logo</span>
-          </button>
+          {/* Direct "Đổi Logo / Tải Ảnh" button - only visible to admin */}
+          {(isAdmin || isVisualEditActive) && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setLogoModalOpen(true);
+              }}
+              title="Đổi Logo / Tải ảnh từ thiết bị (Dành cho Admin)"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-100/90 hover:bg-[#008874] text-emerald-800 hover:text-white text-[11px] font-bold transition-all shadow-xs border border-emerald-200 cursor-pointer"
+            >
+              <Camera className="w-3 h-3" />
+              <span className="hidden xs:inline">Đổi Logo</span>
+            </button>
+          )}
         </div>
 
         {/* Desktop Navigation */}

@@ -42,16 +42,20 @@ export const ProductVisual: React.FC<ProductVisualProps> = ({
 
   return (
     <div
-      className={`relative w-full ${sizeClasses} rounded-2xl overflow-hidden flex items-center justify-center select-none bg-transparent ${className}`}
+      className={`relative w-full ${sizeClasses} overflow-hidden flex items-center justify-center select-none bg-transparent ${className}`}
     >
       {/* Render Custom Uploaded Image or Built-in Illustration */}
       {isCustomImage && !imgError ? (
-        <div className="relative z-10 w-full h-full flex items-center justify-center overflow-hidden p-1.5 sm:p-2.5">
+        <div className="relative z-10 w-full h-full flex items-center justify-center overflow-hidden">
           <img
             src={imageKey}
             alt="Sản phẩm TINGO"
             onError={() => setImgError(true)}
-            className="max-h-full max-w-full w-auto h-auto object-contain transition-transform duration-300 group-hover:scale-105 drop-shadow-xs"
+            className={`w-full h-full transition-transform duration-500 group-hover:scale-105 ${
+              fit === 'contain'
+                ? 'object-contain max-h-full max-w-full p-2 drop-shadow-xs'
+                : 'object-cover'
+            }`}
             referrerPolicy="no-referrer"
           />
         </div>

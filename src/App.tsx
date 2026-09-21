@@ -298,7 +298,13 @@ function MainApp() {
         {/* Quality Certifications Bar */}
         <CertificationsSection />
 
-        {/* Custom Admin Dynamic Blocks (Promo Banners, Custom FAQ, etc.) */}
+        {/* 9:16 Vertical Video Carousel & Banner Video (Trải Nghiệm Thực Tế) - Before Products */}
+        <VerticalVideoCarouselSection
+          onAddToCart={handleAddToCart}
+          onSelectProduct={(p) => setSelectedProduct(p)}
+        />
+
+        {/* Custom Admin Dynamic Blocks (Promo Banners, Image Showcases, etc.) */}
         {config.customBlocks?.map((block, idx) => (
           <CustomBlockRenderer
             key={block.id}
@@ -322,12 +328,6 @@ function MainApp() {
 
         {/* Real Customer Testimonials (Banner Format) */}
         <TestimonialsSection />
-
-        {/* 9:16 Vertical Video Carousel (Reels / Shorts / TikTok format) */}
-        <VerticalVideoCarouselSection
-          onAddToCart={handleAddToCart}
-          onSelectProduct={(p) => setSelectedProduct(p)}
-        />
 
         {/* Health Knowledge & Blog */}
         <HealthBlogSection />

@@ -37,6 +37,10 @@ export const CustomBlockRenderer: React.FC<CustomBlockRendererProps> = ({
     setExpandedFaq(expandedFaq === id ? null : id);
   };
 
+  if (!block || (block as any).type === 'faq') {
+    return null;
+  }
+
   const renderContent = () => {
     switch (block.type) {
       case 'promo_banner':
@@ -75,7 +79,6 @@ export const CustomBlockRenderer: React.FC<CustomBlockRendererProps> = ({
         );
 
       case 'image_showcase':
-      default:
         return (
           <div className="bg-white rounded-3xl p-6 sm:p-10 border border-emerald-100 shadow-sm grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
             {block.image && (
@@ -103,6 +106,9 @@ export const CustomBlockRenderer: React.FC<CustomBlockRendererProps> = ({
             </div>
           </div>
         );
+
+      default:
+        return null;
     }
   };
 
