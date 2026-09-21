@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useVisualEditor } from '../../context/VisualEditorContext';
 import { VerticalVideoItem } from '../../types';
+import { saveVideoBlob } from '../../lib/storageHelper';
 
 interface VerticalVideoEditorModalProps {
   isOpen: boolean;
@@ -135,12 +136,46 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
 
     setIsUploadingVideo(true);
 
-    // If small video (< 15MB), read as base64 data URL for instant offline/direct playback
-    // Otherwise use Blob URL or local storage
+    const tempVideoUrl = URL.createObjectURL(file);
+
+    // Auto-capture video thumbnail frame to prevent black boxes
+    const video = document.createElement('video');
+    video.src = tempVideoUrl;
+    video.crossOrigin = 'anonymous';
+    video.currentTime = 0.5;
+    video.muted = true;
+    video.playsInline = true;
+
+    video.onloadeddata = () => {
+      video.currentTime = 0.5;
+    };
+
+    video.onseeked = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 480;
+        canvas.height = video.videoHeight || 854;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const thumb = canvas.toDataURL('image/jpeg', 0.82);
+          setFormData((prev) => ({
+            ...prev,
+            thumbnailUrl: prev.thumbnailUrl || thumb,
+          }));
+        }
+      } catch (err) {
+        console.warn('Auto thumbnail capture notice:', err);
+      }
+    };
+
+    // Read video as Base64 Data URL for standalone playback
     const reader = new FileReader();
     reader.onload = (event) => {
       const result = event.target?.result as string;
       if (result) {
+        const itemId = editingItemId || `video-custom-${Date.now()}`;
+        saveVideoBlob(itemId, result);
         setFormData((prev) => ({
           ...prev,
           videoUrl: result,
@@ -150,11 +185,9 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
       setIsUploadingVideo(false);
     };
     reader.onerror = () => {
-      // Fallback to URL.createObjectURL
-      const blobUrl = URL.createObjectURL(file);
       setFormData((prev) => ({
         ...prev,
-        videoUrl: blobUrl,
+        videoUrl: tempVideoUrl,
         title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
       }));
       setIsUploadingVideo(false);

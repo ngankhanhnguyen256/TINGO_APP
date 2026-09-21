@@ -1,18 +1,23 @@
 import { useState, useEffect } from 'react';
 
 /**
- * Real-time Product Stats & Auto-Increment Sold Counter Manager
- * Rule: 2 clicks or views on a product = +1 to the sold count ("Đã bán")
+ * Product Stats & Sold Counter Manager (Lượt bán sản phẩm)
+ * Logic quy định:
+ * - 10 lượt nhấp (views / clicks / interactions) = 1 lượt bán tăng thêm (+1 Đã bán)
+ * - Cập nhật gom theo ngày (Batch update daily), không nhảy số đột ngột sau mỗi lượt nhấp đơn lẻ.
  */
 
-const STATS_STORAGE_KEY = 'tingo_product_clicks_stats_v1';
+const STATS_STORAGE_KEY = 'tingo_product_clicks_stats_v2';
 
 interface ProductStatsRecord {
-  clicks: number;
-  baseSold: number;
+  totalClicks: number;       // Tổng số lượt nhấp tích lũy
+  todayClicks: number;       // Lượt nhấp tích lũy trong ngày hiện tại
+  lastSettledDate: string;   // Ngày chốt lượt bán gần nhất (YYYY-MM-DD)
+  baseSold: number;          // Lượt bán cơ sở
+  settledSoldBonus: number;  // Số lượt bán đã chốt từ các ngày trước đó
 }
 
-// Default base sold count for known products to give realistic authentic storefront volume
+// Lượt bán cơ sở ban đầu tạo độ uy tín cho từng sản phẩm
 const DEFAULT_BASE_SOLD: Record<string, number> = {
   'tingo-vhealth-duo': 1240,
   'tingo-quantum-water': 890,
@@ -21,6 +26,11 @@ const DEFAULT_BASE_SOLD: Record<string, number> = {
   'tingo-caphe-link': 480,
   'tingo-vhealth-socola': 620,
 };
+
+function getTodayString(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
 
 function getStoredStats(): Record<string, ProductStatsRecord> {
   if (typeof window === 'undefined') return {};
@@ -42,69 +52,112 @@ function saveStoredStats(stats: Record<string, ProductStatsRecord>): void {
 }
 
 /**
- * Record a user view or click on a specific product.
- * Automatically adds 1 click and if clicks reach a multiple of 2, sold count increases by 1.
+ * Settle daily clicks into sold count:
+ * Converts accumulated clicks (10 clicks = 1 sold) when day rolls over or on daily sync.
+ */
+function settleRecordIfNeeded(record: ProductStatsRecord, today: string): ProductStatsRecord {
+  if (!record.lastSettledDate) {
+    record.lastSettledDate = today;
+    return record;
+  }
+
+  // If a new day has arrived since last settlement
+  if (record.lastSettledDate !== today) {
+    // Every 10 clicks in the past period adds 1 to settled sold bonus
+    const additionalSold = Math.floor(record.todayClicks / 10);
+    record.settledSoldBonus = (record.settledSoldBonus || 0) + additionalSold;
+    // Remainder clicks roll over
+    record.todayClicks = record.todayClicks % 10;
+    record.lastSettledDate = today;
+  }
+
+  return record;
+}
+
+/**
+ * Ghi nhận lượt nhấp/tương tác vào sản phẩm.
+ * Tăng bộ đếm lượt nhấp nhưng bảo toàn lượt bán theo chu kỳ ngày (10 nhấp = 1 bán).
  */
 export function recordProductInteraction(productId: string, initialBaseSold?: number): number {
   if (!productId) return 0;
   const stats = getStoredStats();
+  const today = getTodayString();
   const base =
     initialBaseSold !== undefined
       ? initialBaseSold
       : DEFAULT_BASE_SOLD[productId] || 250;
 
-  const currentRecord = stats[productId] || { clicks: 0, baseSold: base };
-  const newClicks = currentRecord.clicks + 1;
-
-  stats[productId] = {
-    clicks: newClicks,
-    baseSold: currentRecord.baseSold || base,
+  let currentRecord = stats[productId] || {
+    totalClicks: 0,
+    todayClicks: 0,
+    lastSettledDate: today,
+    baseSold: base,
+    settledSoldBonus: 0,
   };
 
+  currentRecord = settleRecordIfNeeded(currentRecord, today);
+
+  // Increment clicks
+  currentRecord.totalClicks = (currentRecord.totalClicks || 0) + 1;
+  currentRecord.todayClicks = (currentRecord.todayClicks || 0) + 1;
+  currentRecord.baseSold = currentRecord.baseSold || base;
+
+  stats[productId] = currentRecord;
   saveStoredStats(stats);
 
-  // Dispatch custom event for real-time reactive UI update
+  const totalSold = calculateTotalSold(productId, currentRecord.baseSold);
+
+  // Dispatch custom event
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
       new CustomEvent('tingo-product-stats-updated', {
         detail: {
           productId,
-          clicks: newClicks,
-          soldCount: calculateTotalSold(productId, stats[productId].baseSold),
+          totalClicks: currentRecord.totalClicks,
+          todayClicks: currentRecord.todayClicks,
+          soldCount: totalSold,
         },
       })
     );
   }
 
-  return calculateTotalSold(productId, stats[productId].baseSold);
+  return totalSold;
 }
 
 /**
- * Calculates current total sold count = baseSold + Math.floor(clicks / 2)
+ * Tính toán lượt bán hiển thị cho sản phẩm:
+ * = baseSold + settledSoldBonus (đã chốt theo chu kỳ ngày với tỷ lệ 10 nhấp = 1 bán)
  */
 export function calculateTotalSold(productId: string, fallbackBase?: number): number {
   const stats = getStoredStats();
+  const today = getTodayString();
+  let record = stats[productId];
+
   const base =
     fallbackBase !== undefined
       ? fallbackBase
-      : stats[productId]?.baseSold || DEFAULT_BASE_SOLD[productId] || 250;
+      : record?.baseSold || DEFAULT_BASE_SOLD[productId] || 250;
 
-  const clicks = stats[productId]?.clicks || 0;
-  const addedFromInteractions = Math.floor(clicks / 2);
+  if (!record) {
+    return base;
+  }
 
-  return base + addedFromInteractions;
+  record = settleRecordIfNeeded(record, today);
+  const settledBonus = record.settledSoldBonus || 0;
+
+  return base + settledBonus;
 }
 
 /**
- * Get total clicks/views for a product
+ * Lấy tổng số lượt nhấp của sản phẩm
  */
 export function getProductClicks(productId: string): number {
   const stats = getStoredStats();
-  return stats[productId]?.clicks || 0;
+  return stats[productId]?.totalClicks || 0;
 }
 
 /**
- * Format sold count nicely (e.g., 1.2k or 358)
+ * Định dạng số lượng đã bán gọn gàng (VD: 1.2k hoặc 890)
  */
 export function formatSoldCount(sold: number): string {
   if (sold >= 1000) {
@@ -115,7 +168,7 @@ export function formatSoldCount(sold: number): string {
 }
 
 /**
- * React hook to get real-time sold count that dynamically increases with 2 clicks = +1 sold
+ * React hook lấy số lượng đã bán ổn định theo ngày cho sản phẩm
  */
 export function useProductSold(productId: string, initialBase?: number) {
   const [sold, setSold] = useState<number>(() => calculateTotalSold(productId, initialBase));
@@ -126,10 +179,10 @@ export function useProductSold(productId: string, initialBase?: number) {
     setClicks(getProductClicks(productId));
 
     const handleUpdate = (e: Event) => {
-      const customEvent = e as CustomEvent<{ productId: string; clicks: number; soldCount: number }>;
+      const customEvent = e as CustomEvent<{ productId: string; totalClicks: number; soldCount: number }>;
       if (customEvent.detail && customEvent.detail.productId === productId) {
         setSold(customEvent.detail.soldCount);
-        setClicks(customEvent.detail.clicks);
+        setClicks(customEvent.detail.totalClicks);
       }
     };
 

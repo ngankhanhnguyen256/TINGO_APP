@@ -1,8 +1,9 @@
 import { LandingPageConfig } from '../types';
 
 const DB_NAME = 'tingo_store_db';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'app_config';
+const VIDEO_STORE_NAME = 'video_media';
 
 /**
  * Open or initialize IndexedDB
@@ -14,15 +15,54 @@ function openDB(): Promise<IDBDatabase> {
       return;
     }
     const request = window.indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
+    request.onupgradeneeded = (e) => {
       const db = request.result;
       if (!db.objectStoreNames.contains(STORE_NAME)) {
         db.createObjectStore(STORE_NAME);
+      }
+      if (!db.objectStoreNames.contains(VIDEO_STORE_NAME)) {
+        db.createObjectStore(VIDEO_STORE_NAME);
       }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
   });
+}
+
+/**
+ * Save large video blob/base64 to persistent IndexedDB
+ */
+export async function saveVideoBlob(id: string, dataUrlOrBlob: string): Promise<void> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(VIDEO_STORE_NAME);
+      const req = store.put(dataUrlOrBlob, id);
+      req.onsuccess = () => resolve();
+      req.onerror = () => reject(req.error);
+    });
+  } catch (err) {
+    console.warn('Failed to save video blob to IndexedDB:', err);
+  }
+}
+
+/**
+ * Load video blob/base64 from persistent IndexedDB
+ */
+export async function loadVideoBlob(id: string): Promise<string | null> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(VIDEO_STORE_NAME, 'readonly');
+      const store = tx.objectStore(VIDEO_STORE_NAME);
+      const req = store.get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -185,6 +225,21 @@ export async function sanitizeConfigImages(config: LandingPageConfig): Promise<L
     for (const b of newConfig.customBlocks) {
       if (b.image) {
         b.image = (await sanitizeImageStr(b.image)) || b.image;
+      }
+    }
+  }
+
+  if (Array.isArray(newConfig.verticalVideos?.items)) {
+    for (const v of newConfig.verticalVideos.items) {
+      if (v.thumbnailUrl) {
+        v.thumbnailUrl = (await sanitizeImageStr(v.thumbnailUrl)) || v.thumbnailUrl;
+      }
+      if (v.authorAvatar) {
+        v.authorAvatar = (await sanitizeImageStr(v.authorAvatar)) || v.authorAvatar;
+      }
+      // If videoUrl is a huge data URL, ensure it is safely stored in IndexedDB
+      if (v.videoUrl && v.videoUrl.startsWith('data:video/')) {
+        await saveVideoBlob(v.id, v.videoUrl);
       }
     }
   }
