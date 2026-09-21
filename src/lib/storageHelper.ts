@@ -254,7 +254,7 @@ export async function sanitizeConfigImages(config: LandingPageConfig): Promise<L
         try {
           const cloudRef = await uploadVideoToCloud(v.id, v.videoUrl, {
             title: v.title,
-            author: v.authorName,
+            author: v.author,
           });
           v.videoUrl = cloudRef;
         } catch {

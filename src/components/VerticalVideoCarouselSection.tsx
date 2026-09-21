@@ -321,13 +321,9 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     playsInline
                     loop
                     muted={muted}
-                    preload="auto"
-                    crossOrigin="anonymous"
+                    preload="metadata"
                     onLoadedData={() => {
                       setVideoLoadedMap((prev) => ({ ...prev, [item.id]: true }));
-                    }}
-                    onError={() => {
-                      console.warn(`Video ${item.id} fallback note`);
                     }}
                     className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
                       isPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'
@@ -540,7 +536,6 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     muted={muted}
                     controls
                     preload="auto"
-                    crossOrigin="anonymous"
                     className="relative z-10 w-full h-full object-contain"
                   />
                 )}
