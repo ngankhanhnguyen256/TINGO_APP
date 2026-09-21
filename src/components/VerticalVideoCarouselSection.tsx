@@ -161,8 +161,25 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
       if (el) el.pause();
       setPlayingVideoId(null);
     }
+    setMuted(false); // Unmute for full experience in modal
     setActiveModalVideo(item);
   };
+
+  // Keyboard navigation for modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (!activeModalVideo) return;
+      if (e.key === 'Escape') {
+        setActiveModalVideo(null);
+      } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+        handleNextModalVideo();
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+        handlePrevModalVideo();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeModalVideo, items]);
 
   const toggleMute = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -293,8 +310,8 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
             return (
               <div
                 key={item.id}
-                onClick={(e) => togglePlay(item.id, e)}
-                className="snap-start shrink-0 w-[240px] sm:w-[280px] md:w-[300px] aspect-[9/16] rounded-3xl bg-slate-900 relative overflow-hidden shadow-xl hover:shadow-2xl transition-all duration-300 group cursor-pointer border border-emerald-900/30 select-none"
+                onClick={(e) => openVideoModal(e, item)}
+                className="snap-start shrink-0 w-[240px] sm:w-[280px] md:w-[300px] aspect-[9/16] rounded-3xl bg-slate-900 relative overflow-hidden shadow-xl hover:shadow-2xl transition-all duration-300 group cursor-pointer border border-emerald-900/30 select-none hover:-translate-y-1"
               >
                 {/* 1. Underlying Crisp Thumbnail Poster Layer (Guarantees card is NEVER pitch black) */}
                 {item.thumbnailUrl && (
@@ -320,13 +337,13 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     poster={item.thumbnailUrl}
                     playsInline
                     loop
-                    muted={muted}
+                    muted={true}
                     preload="metadata"
                     onLoadedData={() => {
                       setVideoLoadedMap((prev) => ({ ...prev, [item.id]: true }));
                     }}
                     className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
-                      isPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-40'
+                      isPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-60'
                     }`}
                   />
                 ) : (
@@ -362,20 +379,6 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                       <Maximize2 className="w-3.5 h-3.5" />
                     </button>
 
-                    {isPlaying && !isYouTube && (
-                      <button
-                        onClick={toggleMute}
-                        className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer"
-                        title={muted ? 'Bật âm thanh' : 'Tắt âm thanh'}
-                      >
-                        {muted ? (
-                          <VolumeX className="w-3.5 h-3.5" />
-                        ) : (
-                          <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
-                        )}
-                      </button>
-                    )}
-
                     <button
                       onClick={(e) => toggleLike(e, item.id)}
                       className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full backdrop-blur-md flex items-center justify-center transition-colors cursor-pointer ${
@@ -392,14 +395,12 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                   </div>
                 </div>
 
-                {/* 5. Center Play / Pause Indicator */}
-                {!isPlaying && (
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-                    <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-[#008874]/90 text-white flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform backdrop-blur-xs">
-                      <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-white ml-0.5" />
-                    </div>
+                {/* 5. Center Play Indicator */}
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
+                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-[#008874]/90 text-white flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform backdrop-blur-xs">
+                    <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-white ml-0.5" />
                   </div>
-                )}
+                </div>
 
                 {/* 6. Bottom Metadata & Product Tag */}
                 <div className="absolute bottom-3.5 left-3.5 right-3.5 z-10 space-y-2 text-white">
@@ -479,7 +480,12 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
         const ytEmbed = getYouTubeEmbedUrl(modalEffectiveUrl);
 
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/90 backdrop-blur-md animate-fadeIn">
+          <div
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setActiveModalVideo(null);
+            }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/90 backdrop-blur-md animate-fadeIn"
+          >
             <div className="relative w-full max-w-md aspect-[9/16] max-h-[92vh] rounded-3xl bg-black overflow-hidden shadow-2xl border border-white/10 flex flex-col justify-between">
               
               {/* Top Bar */}
