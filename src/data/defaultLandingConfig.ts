@@ -2,6 +2,13 @@ import { LandingPageConfig } from '../types';
 import { PRODUCTS, HEALTH_ARTICLES, TESTIMONIALS } from './mockData';
 
 export const DEFAULT_LANDING_CONFIG: LandingPageConfig = {
+  logo: {
+    type: 'badge',
+    imageUrl: '',
+    text: 'TINGO',
+    tagline: 'Dinh Dưỡng Từ Thiên Nhiên',
+    height: 44,
+  },
   hero: {
     badgeText: '100% Nguyên Liệu Tự Nhiên Sạch',
     titleLine1: 'TINGO',
@@ -157,9 +164,20 @@ export const DEFAULT_LANDING_CONFIG: LandingPageConfig = {
   },
   footer: {
     brandDesc: 'Đồ uống & dinh dưỡng sức khoẻ từ nguyên liệu tự nhiên Việt Nam.',
-    address: '1/12 Linh Đông, TP. Thủ Đức, TP.HCM',
-    hotline: '028 2210 7946',
-    email: 'hello@tingo.vn',
+    address: '387C Lê Văn Khương, Tân Thới Hiệp, TP.HCM',
+    addressLink: 'https://maps.google.com/?q=387C+Lê+Văn+Khương,+Tân+Thới+Hiệp,+Hồ+Chí+Minh',
+    hotline: '0866.129.255',
+    hotlineLink: 'tel:0866129255',
+    email: 'tingodrink@gmail.com',
+    emailLink: 'mailto:tingodrink@gmail.com',
+    facebookUrl: 'https://www.facebook.com/tingodrink',
+    instagramUrl: 'https://www.instagram.com/tingodrink',
+    youtubeUrl: 'https://www.youtube.com/@tingodrink',
+    tiktokUrl: 'https://www.tiktok.com/@tingodrink',
+    zaloUrl: 'https://zalo.me/0866129255',
+    faqBannerUrl: '#faq',
+    faqBannerTitle: 'CÂU HỎI THƯỜNG GẶP (FAQ)',
+    faqBannerSubtitle: 'Giải đáp nhanh 100% thắc mắc về sản phẩm, giao hàng và dinh dưỡng TINGO',
     copyright: '© 2026 TINGO Organic & Health Vietnam. Tất cả quyền được bảo lưu.',
   },
   customBlocks: [],

@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback } from 'react';
 import {
   LandingPageConfig,
+  LogoConfig,
   HeroData,
   WhyChooseData,
   WhyChooseItem,
@@ -73,6 +74,7 @@ interface VisualEditorContextType {
   config: LandingPageConfig;
   
   // Section Updaters
+  updateLogo: (data: Partial<LogoConfig>) => void;
   updateHero: (data: Partial<HeroData>) => void;
   updateWhyChoose: (data: Partial<WhyChooseData>) => void;
   addWhyChooseItem: (item: WhyChooseItem) => void;
@@ -562,6 +564,21 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
   };
 
   // Section Updaters
+  const updateLogo = (data: Partial<LogoConfig>) => {
+    mutateConfig((prev) => ({
+      ...prev,
+      logo: {
+        ...(prev.logo || {
+          type: 'badge',
+          text: 'TINGO',
+          tagline: 'Dinh Dưỡng Từ Thiên Nhiên',
+          height: 44,
+        }),
+        ...data,
+      },
+    }));
+  };
+
   const updateHero = (data: Partial<HeroData>) => {
     mutateConfig((prev) => ({
       ...prev,
@@ -975,6 +992,7 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
         undo,
         redo,
         config,
+        updateLogo,
         updateHero,
         updateWhyChoose,
         addWhyChooseItem,

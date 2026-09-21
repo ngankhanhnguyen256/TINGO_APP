@@ -68,6 +68,7 @@ import {
 } from '../../lib/telegram';
 import { formatVietnameseDateTime } from '../../utils/dateFormatter';
 import { sanitizeFirestoreData } from '../../utils/sanitizeFirestore';
+import { buildUpdatedFirestoreTimeline, getSynchronizedTimeline } from '../../utils/orderTimelineHelper';
 
 const ACCOUNTS_CACHE_KEY = 'tingo_registered_customers_cache';
 const BLOCKED_CACHE_KEY = 'tingo_blocked_identifiers_cache';
@@ -324,24 +325,21 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
       const isoString = now.toISOString();
       const currentOrder = orders.find((o) => o.id === orderId);
 
+      const cancelReason = currentOrder?.cancelReason || 'Quản trị viên chuyển trạng thái';
+      const updatedTimeline = currentOrder
+        ? buildUpdatedFirestoreTimeline(currentOrder, newStatus, cancelReason)
+        : [];
+
       const updatePayload: Record<string, any> = {
         status: newStatus,
         updatedAt: isoString,
+        timeline: updatedTimeline,
       };
-
-      let updatedTimeline = currentOrder?.timeline ? [...currentOrder.timeline] : [];
 
       if (newStatus === 'cancelled') {
         updatePayload.cancelledAt = isoString;
         updatePayload.cancelledBy = 'admin';
         updatePayload.cancelReason = updatePayload.cancelReason || 'Quản trị viên hủy đơn';
-        updatedTimeline.push({
-          status: 'cancelled',
-          title: 'Đơn hàng đã được Quản trị viên TINGO hủy',
-          time: formatVietnameseDateTime(isoString, true),
-          completed: true,
-        });
-        updatePayload.timeline = updatedTimeline;
       }
 
       const orderRef = doc(db, 'orders', orderId);
@@ -352,6 +350,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
         ...updatePayload,
         id: orderId,
         status: newStatus,
+        timeline: updatedTimeline,
       };
 
       setOrders((prev) =>

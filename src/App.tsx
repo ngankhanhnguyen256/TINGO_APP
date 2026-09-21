@@ -7,6 +7,7 @@ import { ProductCatalogSection } from './components/ProductCatalogSection';
 import { CertificationsSection } from './components/CertificationsSection';
 import { HealthBlogSection } from './components/HealthBlogSection';
 import { TestimonialsSection } from './components/TestimonialsSection';
+import { FaqBannerSection } from './components/FaqBannerSection';
 import { NewsletterSection } from './components/NewsletterSection';
 import { Footer } from './components/Footer';
 import { CartDrawer } from './components/CartDrawer';
@@ -33,15 +34,21 @@ import { PRODUCTS } from './data/mockData';
 import { CartItem, Product, Order } from './types';
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from './lib/firebase';
+import {
+  loadStoredCart,
+  saveStoredCart,
+  clearCartStorage,
+  fetchCustomerCloudCart,
+} from './utils/cartStorage';
 
 function MainApp() {
   const { config, isAdmin } = useVisualEditor();
-  const { isLoggedIn, openAuthModal } = useCustomerAuth();
+  const { customer, isLoggedIn, openAuthModal } = useCustomerAuth();
   const [jsonBackupOpen, setJsonBackupOpen] = useState(false);
   const [adminOrdersOpen, setAdminOrdersOpen] = useState(false);
 
-  // Clean empty cart - No fake mock cart items
-  const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  // Persistent cart with Cookie + LocalStorage + Customer Cloud Sync
+  const [cartItems, setCartItems] = useState<CartItem[]>(() => loadStoredCart());
 
   const [cartDrawerOpen, setCartDrawerOpen] = useState(false);
   const [checkoutModalOpen, setCheckoutModalOpen] = useState(false);
@@ -66,17 +73,33 @@ function MainApp() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [activeSection, setActiveSection] = useState<string>('hero');
 
-  // Customer session logout cleaner: completely clears cart & vouchers
-  const prevIsLoggedInRef = useRef(isLoggedIn);
+  // Auto-save cart to Cookie & LocalStorage & Customer Cloud Profile
   useEffect(() => {
-    if (prevIsLoggedInRef.current && !isLoggedIn) {
+    saveStoredCart(cartItems, customer?.phone);
+  }, [cartItems, customer?.phone]);
+
+  // If customer logs in, sync their cross-device cloud cart if local cart is empty
+  useEffect(() => {
+    if (isLoggedIn && customer?.phone) {
+      fetchCustomerCloudCart(customer.phone).then((cloudCart) => {
+        if (cloudCart && cloudCart.length > 0) {
+          setCartItems((curr) => (curr.length === 0 ? cloudCart : curr));
+        }
+      });
+    }
+  }, [isLoggedIn, customer?.phone]);
+
+  // Listen for explicit logout event from CustomerAuthContext
+  useEffect(() => {
+    const handleCartCleared = () => {
       setCartItems([]);
       setAppliedCoupon('');
       setDiscountAmount(0);
       setShippingFee(0);
-    }
-    prevIsLoggedInRef.current = isLoggedIn;
-  }, [isLoggedIn]);
+    };
+    window.addEventListener('tingo-cart-cleared', handleCartCleared);
+    return () => window.removeEventListener('tingo-cart-cleared', handleCartCleared);
+  }, []);
 
   // Real-time Firestore orders listener with resilient sorting
   useEffect(() => {
@@ -204,6 +227,16 @@ function MainApp() {
   const handleOrderSuccess = (newOrder: Order) => {
     setOrders((prev) => [newOrder, ...prev.filter((o) => o.id !== newOrder.id)]);
     setCartItems([]);
+    clearCartStorage(customer?.phone);
+    setAppliedCoupon('');
+    setDiscountAmount(0);
+    setShippingFee(0);
+    setCheckoutKey((prev) => prev + 1);
+    try {
+      localStorage.removeItem('tingo_checkout_draft');
+    } catch {
+      // ignore
+    }
     showToast(
       'Đặt hàng thành công! 🎉',
       `Mã đơn hàng #${newOrder.id} đã được gửi tới hệ thống đóng gói TINGO.`
@@ -287,8 +320,11 @@ function MainApp() {
           onSelectProduct={(p) => setSelectedProduct(p)}
         />
 
-        {/* Real Customer Testimonials */}
+        {/* Real Customer Testimonials (Banner Format) */}
         <TestimonialsSection />
+
+        {/* FAQ Banner with configurable URL link */}
+        <FaqBannerSection onOpenFaqModal={() => setStoryModalOpen(true)} />
 
         {/* Health Knowledge & Blog */}
         <HealthBlogSection />
@@ -325,6 +361,10 @@ function MainApp() {
         appliedCoupon={appliedCoupon}
         shippingFee={shippingFee}
         onOrderSuccess={handleOrderSuccess}
+        onOpenTracking={(order) => {
+          setSelectedTrackingOrder(order || null);
+          setTrackingModalOpen(true);
+        }}
       />
 
       {/* Customer Authentication Modal (Mandatory Before Checkout) */}

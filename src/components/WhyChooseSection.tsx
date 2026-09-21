@@ -120,7 +120,7 @@ export const WhyChooseSection: React.FC<WhyChooseSectionProps> = ({ onLearnMore 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         
         {/* Section Header */}
-        <div className="text-center max-w-3xl mx-auto mb-12 sm:mb-16 space-y-2.5">
+        <div className="text-center max-w-3xl mx-auto mb-8 sm:mb-14 space-y-2">
           <EditableElement
             label="Tiêu đề Vì Sao Chọn TINGO"
             onEdit={() =>
@@ -142,7 +142,7 @@ export const WhyChooseSection: React.FC<WhyChooseSectionProps> = ({ onLearnMore 
               <span className="text-xs sm:text-sm font-bold uppercase tracking-widest text-[#008874]">
                 {whyChoose.subtitle}
               </span>
-              <h2 className="text-3xl sm:text-4xl md:text-5xl font-black text-slate-900 font-display tracking-tight mt-1">
+              <h2 className="text-2xl sm:text-4xl md:text-5xl font-black text-slate-900 font-display tracking-tight mt-1">
                 {whyChoose.titleLine1}{' '}
                 <span className="text-[#008874]">{whyChoose.titleLine2}</span>
               </h2>
@@ -150,8 +150,8 @@ export const WhyChooseSection: React.FC<WhyChooseSectionProps> = ({ onLearnMore 
           </EditableElement>
         </div>
 
-        {/* 4 Feature Cards (Screenshot 2 exact layout) */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 sm:gap-8">
+        {/* 4 Feature Cards (Screenshot 2 exact layout & phone optimized) */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 sm:gap-6 lg:gap-8">
           {whyChoose.items.map((item) => {
             const scheme = getSchemeClasses(item.colorScheme);
 
@@ -163,37 +163,37 @@ export const WhyChooseSection: React.FC<WhyChooseSectionProps> = ({ onLearnMore 
                 onDelete={() => removeWhyChooseItem(item.id)}
               >
                 <div
-                  className={`h-full rounded-3xl p-6 sm:p-8 bg-[#fbfdfc] border border-slate-200/90 ${scheme.hoverBorder} hover:shadow-xl hover:shadow-emerald-950/5 transition-all duration-300 flex flex-col justify-between group`}
+                  className={`h-full rounded-2xl sm:rounded-3xl p-5 sm:p-7 md:p-8 bg-[#fbfdfc] border border-slate-200/90 ${scheme.hoverBorder} hover:shadow-xl hover:shadow-emerald-950/5 transition-all duration-300 flex flex-col justify-between group`}
                 >
-                  <div className="space-y-4">
+                  <div className="space-y-3 sm:space-y-4">
                     {/* Top Row: Icon and Highlight Badge */}
                     <div className="flex items-center justify-between gap-3">
-                      <div className={`w-12 h-12 rounded-2xl ${scheme.iconBg} flex items-center justify-center shrink-0 shadow-xs transition-transform group-hover:scale-110`}>
+                      <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl ${scheme.iconBg} flex items-center justify-center shrink-0 shadow-xs transition-transform group-hover:scale-110`}>
                         {renderIcon(item.iconType)}
                       </div>
 
                       {item.highlight && (
-                        <span className={`text-[11px] font-bold px-3 py-1 rounded-full border ${scheme.badgeBg}`}>
+                        <span className={`text-[10px] sm:text-[11px] font-bold px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-full border ${scheme.badgeBg}`}>
                           {item.highlight}
                         </span>
                       )}
                     </div>
 
                     {/* Card Title */}
-                    <h3 className="text-xl sm:text-2xl font-bold text-slate-900 font-display group-hover:text-[#008764] transition-colors">
+                    <h3 className="text-base sm:text-2xl font-bold text-slate-900 font-display group-hover:text-[#008764] transition-colors leading-snug">
                       {item.title}
                     </h3>
 
                     {/* Description */}
-                    <p className="text-slate-600 text-sm sm:text-base leading-relaxed font-normal">
+                    <p className="text-slate-600 text-xs sm:text-base leading-relaxed font-normal">
                       {item.description}
                     </p>
                   </div>
 
                   {/* Read More Trigger */}
-                  <div className="pt-4 mt-4 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-[#008764]">
+                  <div className="pt-3 sm:pt-4 mt-3 sm:mt-4 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-[#008764]">
                     <span className="flex items-center gap-1 group-hover:gap-2 transition-all">
-                      <span>Tìm hiểu thêm kiến thức</span>
+                      <span>Tìm hiểu thêm</span>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </span>
                   </div>

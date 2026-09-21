@@ -36,6 +36,7 @@ interface CheckoutModalProps {
   appliedCoupon: string;
   shippingFee: number;
   onOrderSuccess: (order: Order) => void;
+  onOpenTracking?: (order: Order) => void;
 }
 
 export const CheckoutModal: React.FC<CheckoutModalProps> = ({
@@ -46,6 +47,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
   appliedCoupon,
   shippingFee: initialShippingFee,
   onOrderSuccess,
+  onOpenTracking,
 }) => {
   const {
     customer,
@@ -368,7 +370,25 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
     setCreatedOrder(null);
     setErrors({});
     setIsSubmitting(false);
+    setNotes('');
+    try {
+      localStorage.removeItem('tingo_checkout_draft');
+    } catch {
+      // ignore
+    }
     onClose();
+  };
+
+  const handleViewTracking = () => {
+    if (createdOrder && onOpenTracking) {
+      const orderToTrack = createdOrder;
+      handleCloseModal();
+      setTimeout(() => {
+        onOpenTracking(orderToTrack);
+      }, 150);
+    } else {
+      handleCloseModal();
+    }
   };
 
   return (
@@ -448,12 +468,23 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               Chuyên viên chăm sóc sức khỏe TINGO sẽ sớm liên hệ xác nhận và tiến hành gửi hàng nhanh nhất cho bạn.
             </p>
 
-            <button
-              onClick={handleCloseModal}
-              className="px-8 py-3 rounded-full bg-[#008874] hover:bg-[#007052] text-white font-bold text-sm shadow-md transition-all cursor-pointer"
-            >
-              Tiếp Tục Mua Sắm
-            </button>
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+              <button
+                type="button"
+                onClick={handleCloseModal}
+                className="w-full sm:w-auto px-6 py-3 rounded-full bg-[#008874] hover:bg-[#007052] text-white font-bold text-sm shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                <span>🛍️ Mua Thêm Đơn Hàng Mới</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleViewTracking}
+                className="w-full sm:w-auto px-6 py-3 rounded-full bg-emerald-50 hover:bg-emerald-100 text-[#008874] border border-emerald-300 font-bold text-sm transition-all cursor-pointer flex items-center justify-center gap-2"
+              >
+                <span>📦 Tra Cứu Hành Trình Đơn Hàng</span>
+              </button>
+            </div>
           </div>
         ) : (
           /* Checkout Form */

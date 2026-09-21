@@ -25,6 +25,7 @@ import { db } from '../lib/firebase';
 import { notifyCancelOrder } from '../lib/telegram';
 import { formatVietnameseDateTime } from '../utils/dateFormatter';
 import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
+import { getSynchronizedTimeline } from '../utils/orderTimelineHelper';
 
 interface OrderTrackingModalProps {
   isOpen: boolean;
@@ -585,47 +586,101 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
               </div>
             )}
 
-            {/* Timeline Steps */}
-            <div className="p-4 rounded-2xl bg-slate-50/80 border border-slate-200">
-              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 mb-3.5">
-                Tiến độ hành trình:
-              </h4>
+            {/* Timeline Steps - Fully synchronized with order status */}
+            <div className="p-4 sm:p-5 rounded-2xl bg-slate-50/90 border border-slate-200 shadow-xs">
+              <div className="flex items-center justify-between mb-4">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                  <Truck className="w-4 h-4 text-[#008874]" />
+                  <span>Tiến độ hành trình chi tiết:</span>
+                </h4>
+                <span className="text-[11px] text-emerald-800 font-semibold bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                  Tự động đồng bộ thời gian thực
+                </span>
+              </div>
+
               <div className="relative pl-6 space-y-4 before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-emerald-200">
-                {searchedOrder.timeline?.map((step, idx) => {
-                  const isStepCancelled = step.status === 'cancelled';
+                {getSynchronizedTimeline(searchedOrder).map((step, idx) => {
+                  const isCancelled = step.isCancelled;
+                  const isCompleted = step.completed;
+                  const isCurrent = step.isCurrent;
+
                   return (
-                    <div key={idx} className="relative flex items-start gap-3.5">
+                    <div
+                      key={step.id || idx}
+                      className={`relative flex items-start gap-3.5 p-2.5 rounded-xl transition-all ${
+                        isCurrent && !isCancelled
+                          ? 'bg-emerald-50/80 border border-emerald-200 shadow-xs'
+                          : ''
+                      }`}
+                    >
                       <div
-                        className={`absolute -left-6 w-5 h-5 rounded-full flex items-center justify-center text-xs ${
-                          isStepCancelled
-                            ? 'bg-rose-500 text-white shadow-xs'
-                            : step.completed
+                        className={`absolute -left-6 w-5 h-5 rounded-full flex items-center justify-center text-xs transition-all ${
+                          isCancelled
+                            ? 'bg-rose-500 text-white ring-4 ring-rose-100 shadow-xs'
+                            : isCurrent
+                            ? 'bg-[#008874] text-white ring-4 ring-emerald-200 shadow-md animate-pulse'
+                            : isCompleted
                             ? 'bg-[#008874] text-white shadow-xs'
                             : 'bg-slate-200 text-slate-500'
                         }`}
                       >
-                        {isStepCancelled ? (
+                        {isCancelled ? (
                           <XCircle className="w-3.5 h-3.5" />
-                        ) : step.completed ? (
+                        ) : isCompleted || isCurrent ? (
                           <CheckCircle2 className="w-3.5 h-3.5" />
                         ) : (
                           <Clock className="w-3 h-3" />
                         )}
                       </div>
-                      <div>
-                        <span
-                          className={`text-xs font-bold block ${
-                            isStepCancelled
-                              ? 'text-rose-700'
-                              : step.completed
-                              ? 'text-slate-900'
-                              : 'text-slate-400'
-                          }`}
-                        >
-                          {step.title}
-                        </span>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={`text-xs font-bold block ${
+                              isCancelled
+                                ? 'text-rose-700'
+                                : isCurrent
+                                ? 'text-[#007052] font-black'
+                                : isCompleted
+                                ? 'text-slate-900'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {step.title}
+                          </span>
+                          {step.badge && (
+                            <span
+                              className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                                isCancelled
+                                  ? 'bg-rose-100 text-rose-800'
+                                  : isCurrent
+                                  ? 'bg-emerald-600 text-white animate-pulse'
+                                  : 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {step.badge}
+                            </span>
+                          )}
+                        </div>
+
+                        {step.description && (
+                          <p className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                            {step.description}
+                          </p>
+                        )}
+
                         {step.time && (
-                          <span className="text-[11px] text-slate-400 block">{step.time}</span>
+                          <span
+                            className={`text-[11px] block mt-1 font-mono ${
+                              isCurrent
+                                ? 'text-emerald-700 font-semibold'
+                                : isCompleted
+                                ? 'text-slate-500'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {step.time}
+                          </span>
                         )}
                       </div>
                     </div>

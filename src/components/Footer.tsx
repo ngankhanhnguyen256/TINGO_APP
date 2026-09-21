@@ -1,7 +1,21 @@
-import React from 'react';
-import { MapPin, Phone, Mail, Facebook, Instagram, Youtube, ArrowUp, Lock, Edit } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  MapPin,
+  Phone,
+  Mail,
+  Facebook,
+  Instagram,
+  Youtube,
+  ArrowUp,
+  Lock,
+  Edit,
+  ExternalLink,
+  Link as LinkIcon,
+  MessageCircle,
+} from 'lucide-react';
 import { useVisualEditor } from '../context/VisualEditorContext';
 import { EditableElement } from './admin/EditableElement';
+import { FooterLinksEditorModal } from './admin/FooterLinksEditorModal';
 
 interface FooterProps {
   onSelectCategory?: (catId: string) => void;
@@ -14,12 +28,29 @@ export const Footer: React.FC<FooterProps> = ({
   onOpenTracking,
   onOpenStory,
 }) => {
-  const { config, updateFooter, openTextEditor, isAdmin, setAdminLoginModalOpen } = useVisualEditor();
+  const {
+    config,
+    updateFooter,
+    openTextEditor,
+    isAdmin,
+    setAdminLoginModalOpen,
+    isVisualEditActive,
+  } = useVisualEditor();
+
   const footer = config.footer;
+  const logo = config.logo;
+  const [linksModalOpen, setLinksModalOpen] = useState(false);
 
   const scrollToTop = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
+
+  const addressHref =
+    footer.addressLink ||
+    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(footer.address)}`;
+  const hotlineHref =
+    footer.hotlineLink || `tel:${footer.hotline.replace(/\s+/g, '')}`;
+  const emailHref = footer.emailLink || `mailto:${footer.email}`;
 
   return (
     <footer id="tingo-footer" className="bg-[#052319] text-white pt-14 pb-10 border-t border-emerald-950">
@@ -32,12 +63,25 @@ export const Footer: React.FC<FooterProps> = ({
           <div className="lg:col-span-4 space-y-5">
             {/* Logo */}
             <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-full bg-[#008874] flex items-center justify-center text-white shadow-md">
-                <span className="font-extrabold text-xl">T</span>
-              </div>
-              <span className="text-2xl font-black tracking-tight text-white font-display">
-                TINGO
-              </span>
+              {logo?.type === 'image' && logo?.imageUrl ? (
+                <img
+                  src={logo.imageUrl}
+                  alt={logo.text || 'TINGO'}
+                  className="h-10 w-auto object-contain max-w-[180px]"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <>
+                  <div className="w-10 h-10 rounded-full bg-[#008874] flex items-center justify-center text-white shadow-md">
+                    <span className="font-extrabold text-xl">
+                      {logo?.text ? logo.text.charAt(0) : 'T'}
+                    </span>
+                  </div>
+                  <span className="text-2xl font-black tracking-tight text-white font-display">
+                    {logo?.text || 'TINGO'}
+                  </span>
+                </>
+              )}
             </div>
 
             <EditableElement
@@ -53,29 +97,66 @@ export const Footer: React.FC<FooterProps> = ({
               </p>
             </EditableElement>
 
-            {/* Social Icons (Screenshot 5) */}
-            <div className="flex items-center gap-3 pt-2">
+            {/* Social Icons with customizable links */}
+            <div className="flex items-center flex-wrap gap-2.5 pt-2">
               <a
-                href="#facebook"
+                href={footer.facebookUrl || 'https://www.facebook.com/tingodrink'}
+                target="_blank"
+                rel="noopener noreferrer"
                 aria-label="Facebook TINGO"
                 className="w-9 h-9 rounded-full bg-emerald-900/60 hover:bg-[#008874] text-emerald-100 flex items-center justify-center transition-colors border border-emerald-800/60"
+                title="Mở Facebook TINGO"
               >
                 <Facebook className="w-4 h-4" />
               </a>
+
               <a
-                href="#instagram"
+                href={footer.instagramUrl || 'https://www.instagram.com/tingodrink'}
+                target="_blank"
+                rel="noopener noreferrer"
                 aria-label="Instagram TINGO"
                 className="w-9 h-9 rounded-full bg-emerald-900/60 hover:bg-[#008874] text-emerald-100 flex items-center justify-center transition-colors border border-emerald-800/60"
+                title="Mở Instagram TINGO"
               >
                 <Instagram className="w-4 h-4" />
               </a>
+
               <a
-                href="#youtube"
+                href={footer.youtubeUrl || 'https://www.youtube.com/@tingodrink'}
+                target="_blank"
+                rel="noopener noreferrer"
                 aria-label="YouTube TINGO"
                 className="w-9 h-9 rounded-full bg-emerald-900/60 hover:bg-[#008874] text-emerald-100 flex items-center justify-center transition-colors border border-emerald-800/60"
+                title="Mở YouTube TINGO"
               >
                 <Youtube className="w-4 h-4" />
               </a>
+
+              {footer.zaloUrl && (
+                <a
+                  href={footer.zaloUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label="Zalo TINGO"
+                  className="w-9 h-9 rounded-full bg-emerald-900/60 hover:bg-[#008874] text-emerald-100 flex items-center justify-center transition-colors border border-emerald-800/60 font-black text-xs"
+                  title="Mở Zalo OA TINGO"
+                >
+                  <MessageCircle className="w-4 h-4" />
+                </a>
+              )}
+
+              {/* Admin Quick Trigger to Edit All Links */}
+              {isVisualEditActive && (
+                <button
+                  type="button"
+                  onClick={() => setLinksModalOpen(true)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-[10px] shadow-sm transition-all cursor-pointer"
+                  title="Sửa tất cả liên kết Mạng Xã Hội, Địa Chỉ, Hotline, Email"
+                >
+                  <LinkIcon className="w-3 h-3" />
+                  <span>Sửa Links Footer</span>
+                </button>
+              )}
             </div>
           </div>
 
@@ -135,7 +216,7 @@ export const Footer: React.FC<FooterProps> = ({
                 </a>
               </li>
               <li>
-                <a href="#support" className="hover:text-emerald-300 transition-colors">
+                <a href="#faq-banner" className="hover:text-emerald-300 transition-colors">
                   Câu hỏi thường gặp
                 </a>
               </li>
@@ -144,62 +225,76 @@ export const Footer: React.FC<FooterProps> = ({
                   onClick={onOpenStory}
                   className="hover:text-emerald-300 transition-colors text-left cursor-pointer"
                 >
-                  Liên hệ
+                  Câu chuyện TINGO
                 </button>
               </li>
             </ul>
           </div>
 
-          {/* Column 4: LIÊN HỆ (3 Rounded Pill Cards - Screenshot 5) */}
+          {/* Column 4: LIÊN HỆ (3 Rounded Pill Cards with Auto-Redirect Links) */}
           <div className="lg:col-span-4 space-y-3">
-            <h4 className="text-xs font-black uppercase tracking-wider text-emerald-400 font-display mb-4">
-              LIÊN HỆ
+            <h4 className="text-xs font-black uppercase tracking-wider text-emerald-400 font-display mb-4 flex items-center justify-between">
+              <span>LIÊN HỆ TRỰC TIẾP</span>
+              {isVisualEditActive && (
+                <button
+                  onClick={() => setLinksModalOpen(true)}
+                  className="text-[10px] text-amber-300 hover:underline cursor-pointer normal-case flex items-center gap-1"
+                >
+                  <Edit className="w-3 h-3" />
+                  <span>Cài đặt URLs</span>
+                </button>
+              )}
             </h4>
 
-            {/* Address Card */}
+            {/* Address Card (Auto Redirects to Google Maps) */}
             <EditableElement
-              label="Địa chỉ"
-              onEdit={() =>
-                openTextEditor('Sửa địa chỉ', footer.address, (val) =>
-                  updateFooter({ address: val })
-                )
-              }
+              label="Địa chỉ & Link Google Maps"
+              onEdit={() => setLinksModalOpen(true)}
             >
-              <div className="flex items-center gap-3.5 p-3 rounded-2xl bg-emerald-950/70 border border-emerald-800/40 hover:border-emerald-700 transition-colors">
-                <div className="w-10 h-10 rounded-full bg-emerald-200/90 text-[#052319] flex items-center justify-center shrink-0">
+              <a
+                href={addressHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-3.5 p-3 rounded-2xl bg-emerald-950/70 border border-emerald-800/40 hover:border-emerald-500 hover:bg-emerald-900/60 transition-all group"
+                title="Nhấp để mở bản đồ vị trí chỉ đường Google Maps"
+              >
+                <div className="w-10 h-10 rounded-full bg-emerald-200/90 text-[#052319] flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
                   <MapPin className="w-5 h-5" />
                 </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 block">
-                    ĐỊA CHỈ
-                  </span>
-                  <span className="text-xs font-medium text-emerald-100 leading-snug block">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 block">
+                      ĐỊA CHỈ TRỤ SỞ
+                    </span>
+                    <ExternalLink className="w-3 h-3 text-emerald-400/60 group-hover:text-emerald-300" />
+                  </div>
+                  <span className="text-xs font-medium text-emerald-100 leading-snug block line-clamp-2">
                     {footer.address}
                   </span>
                 </div>
-              </div>
+              </a>
             </EditableElement>
 
-            {/* Hotline Card */}
+            {/* Hotline Card (Auto Redirects to Call) */}
             <EditableElement
-              label="Hotline"
-              onEdit={() =>
-                openTextEditor('Sửa hotline', footer.hotline, (val) =>
-                  updateFooter({ hotline: val })
-                )
-              }
+              label="Hotline & Link Gọi"
+              onEdit={() => setLinksModalOpen(true)}
             >
               <a
-                href={`tel:${footer.hotline.replace(/\s+/g, '')}`}
-                className="flex items-center gap-3.5 p-3 rounded-2xl bg-emerald-950/70 border border-emerald-800/40 hover:border-emerald-700 transition-colors group"
+                href={hotlineHref}
+                className="flex items-center gap-3.5 p-3 rounded-2xl bg-emerald-950/70 border border-emerald-800/40 hover:border-cyan-400 hover:bg-emerald-900/60 transition-all group"
+                title="Nhấp để gọi ngay hotline"
               >
                 <div className="w-10 h-10 rounded-full bg-cyan-200/90 text-[#052319] flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
                   <Phone className="w-5 h-5" />
                 </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-400 block">
-                    HOTLINE
-                  </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-cyan-400 block">
+                      HOTLINE TƯ VẤN
+                    </span>
+                    <ExternalLink className="w-3 h-3 text-cyan-400/60 group-hover:text-cyan-300" />
+                  </div>
                   <span className="text-sm font-bold text-white tracking-wide block">
                     {footer.hotline}
                   </span>
@@ -207,27 +302,27 @@ export const Footer: React.FC<FooterProps> = ({
               </a>
             </EditableElement>
 
-            {/* Email Card */}
+            {/* Email Card (Auto Redirects to Mail) */}
             <EditableElement
-              label="Email"
-              onEdit={() =>
-                openTextEditor('Sửa email', footer.email, (val) =>
-                  updateFooter({ email: val })
-                )
-              }
+              label="Email & Link Gửi Thư"
+              onEdit={() => setLinksModalOpen(true)}
             >
               <a
-                href={`mailto:${footer.email}`}
-                className="flex items-center gap-3.5 p-3 rounded-2xl bg-emerald-950/70 border border-emerald-800/40 hover:border-emerald-700 transition-colors group"
+                href={emailHref}
+                className="flex items-center gap-3.5 p-3 rounded-2xl bg-emerald-950/70 border border-emerald-800/40 hover:border-emerald-400 hover:bg-emerald-900/60 transition-all group"
+                title="Nhấp để gửi email tới TINGO"
               >
                 <div className="w-10 h-10 rounded-full bg-emerald-300/90 text-[#052319] flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
                   <Mail className="w-5 h-5" />
                 </div>
-                <div>
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 block">
-                    EMAIL
-                  </span>
-                  <span className="text-xs font-bold text-white block">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 block">
+                      EMAIL HỖ TRỢ
+                    </span>
+                    <ExternalLink className="w-3 h-3 text-emerald-400/60 group-hover:text-emerald-300" />
+                  </div>
+                  <span className="text-xs font-bold text-white block truncate">
                     {footer.email}
                   </span>
                 </div>
@@ -265,6 +360,12 @@ export const Footer: React.FC<FooterProps> = ({
         </div>
 
       </div>
+
+      {/* Modal for editing all footer URLs & contact links */}
+      <FooterLinksEditorModal
+        isOpen={linksModalOpen}
+        onClose={() => setLinksModalOpen(false)}
+      />
     </footer>
   );
 };

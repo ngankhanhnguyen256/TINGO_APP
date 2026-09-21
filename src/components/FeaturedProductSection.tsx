@@ -1,9 +1,10 @@
 import React from 'react';
-import { CheckCircle2, ShieldCheck, Sparkles, ArrowRight, ShoppingCart } from 'lucide-react';
+import { CheckCircle2, ShieldCheck, Sparkles, ArrowRight, ShoppingCart, Flame } from 'lucide-react';
 import { ProductVisual } from './ProductVisual';
 import { Product } from '../types';
 import { useVisualEditor } from '../context/VisualEditorContext';
 import { EditableElement } from './admin/EditableElement';
+import { useProductSold, recordProductInteraction } from '../utils/productStatsTracker';
 
 interface FeaturedProductSectionProps {
   onAddToCart: (product: Product) => void;
@@ -34,6 +35,18 @@ export const FeaturedProductSection: React.FC<FeaturedProductSectionProps> = ({
     inStock: true,
   };
 
+  const { soldCount, formattedSold } = useProductSold(product.id, product.soldCount);
+
+  const handleSelect = () => {
+    recordProductInteraction(product.id, product.soldCount);
+    onSelectProduct(product as Product);
+  };
+
+  const handleAdd = () => {
+    recordProductInteraction(product.id, product.soldCount);
+    onAddToCart(product as Product);
+  };
+
   return (
     <section id="featured" className="py-14 sm:py-20 bg-gradient-to-b from-[#f8faf7] to-white relative overflow-hidden">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -58,19 +71,20 @@ export const FeaturedProductSection: React.FC<FeaturedProductSectionProps> = ({
                 }}
               >
                 <div 
-                  onClick={() => onSelectProduct(product as Product)}
-                  className="w-full max-w-md bg-white/10 backdrop-blur-md p-4 sm:p-6 rounded-3xl border border-white/20 shadow-xl cursor-pointer group hover:bg-white/15 transition-all"
+                  onClick={handleSelect}
+                  className="w-full max-w-md bg-white/10 backdrop-blur-md p-4 sm:p-6 rounded-3xl border border-white/20 shadow-xl cursor-pointer group hover:bg-white/15 transition-all relative"
                 >
                   <ProductVisual imageKey={product.image} size="lg" />
 
-                  {/* Rating & In stock badge */}
+                  {/* Rating & Sold count & In stock badge */}
                   <div className="mt-4 flex items-center justify-between text-xs text-emerald-200">
                     <span className="flex items-center gap-1">
                       <span className="text-amber-300 font-bold">★ {product.rating || 5.0}</span>
                       <span>({product.reviewsCount || 200}+ đánh giá)</span>
                     </span>
-                    <span className="bg-emerald-500/30 text-emerald-200 px-2.5 py-0.5 rounded-full border border-emerald-400/40">
-                      ✓ Còn hàng tại kho
+                    <span className="inline-flex items-center gap-1 bg-amber-400 text-slate-950 font-black px-2.5 py-0.5 rounded-full shadow-xs">
+                      <Flame className="w-3 h-3 text-slate-950 fill-slate-950" />
+                      <span>Đã bán {formattedSold}</span>
                     </span>
                   </div>
                 </div>
@@ -180,7 +194,7 @@ export const FeaturedProductSection: React.FC<FeaturedProductSectionProps> = ({
               {/* Action Buttons */}
               <div className="pt-4 flex flex-wrap gap-3">
                 <button
-                  onClick={() => onAddToCart(product as Product)}
+                  onClick={handleAdd}
                   className="flex-1 sm:flex-initial inline-flex items-center justify-center gap-2 px-8 py-3.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-base shadow-lg shadow-emerald-950/40 hover:scale-105 active:scale-95 transition-all cursor-pointer"
                 >
                   <ShoppingCart className="w-5 h-5" />
@@ -188,7 +202,7 @@ export const FeaturedProductSection: React.FC<FeaturedProductSectionProps> = ({
                 </button>
 
                 <button
-                  onClick={() => onSelectProduct(product as Product)}
+                  onClick={handleSelect}
                   className="px-6 py-3.5 rounded-full bg-white/10 hover:bg-white/20 text-white font-bold text-sm border border-white/20 transition-all cursor-pointer"
                 >
                   <span>Chi Tiết</span>

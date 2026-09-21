@@ -15,6 +15,7 @@ import { db } from '../lib/firebase';
 import { notifyNewRegistration } from '../lib/telegram';
 import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
 import { isCreatedTodayVN } from '../utils/dateFormatter';
+import { clearCartStorage } from '../utils/cartStorage';
 import { ShieldAlert, Ban, X, UserPlus, PhoneCall } from 'lucide-react';
 
 const STORAGE_KEY = 'tingo_customer_user_session';
@@ -626,11 +627,16 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
   };
 
   const logoutCustomer = () => {
+    const currentPhone = customer?.phone;
     setCustomer(null);
     setPendingCallback(null);
     try {
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem('tingo_checkout_draft');
+      clearCartStorage(currentPhone);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('tingo-cart-cleared'));
+      }
     } catch (e) {
       console.warn('Customer logout clean warning:', e);
     }

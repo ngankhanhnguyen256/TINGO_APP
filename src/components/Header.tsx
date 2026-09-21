@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Search, User, ShoppingBag, Menu, X, ArrowRight, Sparkles, Sliders, ShieldCheck, Eye, EyeOff, Truck, LogOut, Gift } from 'lucide-react';
+import { Search, User, ShoppingBag, Menu, X, ArrowRight, Sparkles, Sliders, ShieldCheck, Eye, EyeOff, Truck, LogOut, Gift, Edit3, Image as ImageIcon } from 'lucide-react';
 import { CartItem } from '../types';
 import { useVisualEditor } from '../context/VisualEditorContext';
 import { useCustomerAuth } from '../context/CustomerAuthContext';
+import { LogoEditorModal } from './admin/LogoEditorModal';
 
 interface HeaderProps {
   cartItems: CartItem[];
@@ -23,11 +24,20 @@ export const Header: React.FC<HeaderProps> = ({
   activeSection,
   onNavigate,
 }) => {
-  const { isAdmin, isVisualEditActive, toggleVisualEdit } = useVisualEditor();
+  const { config, isAdmin, isVisualEditActive, toggleVisualEdit } = useVisualEditor();
   const { customer, isLoggedIn, openAuthModal, openProfileModal, logoutCustomer } = useCustomerAuth();
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
+  const [logoModalOpen, setLogoModalOpen] = useState(false);
+
+  const logo = config.logo || {
+    type: 'badge',
+    imageUrl: '',
+    text: 'TINGO',
+    tagline: 'Dinh Dưỡng Từ Thiên Nhiên',
+    height: 44,
+  };
 
   const totalCartCount = cartItems.reduce((acc, item) => acc + item.quantity, 0);
 
@@ -69,16 +79,59 @@ export const Header: React.FC<HeaderProps> = ({
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
         {/* Brand Logo */}
-        <div
-          onClick={() => onNavigate('hero')}
-          className="flex items-center gap-2.5 cursor-pointer group select-none"
-        >
-          <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-[#008874] flex items-center justify-center text-white shadow-md shadow-emerald-900/15 group-hover:scale-105 transition-transform">
-            <span className="font-extrabold text-xl sm:text-2xl tracking-tighter">T</span>
+        <div className="relative group/logo">
+          <div
+            onClick={() => onNavigate('hero')}
+            className="flex items-center gap-2.5 cursor-pointer select-none transition-transform hover:opacity-95"
+          >
+            {logo.type === 'image' && logo.imageUrl ? (
+              <img
+                src={logo.imageUrl}
+                alt={logo.text || 'TINGO Logo'}
+                style={{ height: `${Math.min(52, Math.max(28, logo.height || 42))}px` }}
+                className="w-auto object-contain max-w-[180px] sm:max-w-[220px]"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <>
+                <div
+                  style={{
+                    width: `${Math.min(48, Math.max(34, (logo.height || 42) - 2))}px`,
+                    height: `${Math.min(48, Math.max(34, (logo.height || 42) - 2))}px`,
+                  }}
+                  className="rounded-full bg-[#008874] flex items-center justify-center text-white shadow-md shadow-emerald-900/15 group-hover/logo:scale-105 transition-transform"
+                >
+                  <span className="font-extrabold text-xl sm:text-2xl tracking-tighter">
+                    {logo.text ? logo.text.charAt(0) : 'T'}
+                  </span>
+                </div>
+                <div className="flex flex-col">
+                  <span className="text-xl sm:text-2xl font-black tracking-tight text-[#008874] font-display leading-tight">
+                    {logo.text || 'TINGO'}
+                  </span>
+                  {logo.tagline && (
+                    <span className="text-[9px] sm:text-[10px] text-slate-500 font-medium tracking-wider uppercase hidden sm:block">
+                      {logo.tagline}
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
           </div>
-          <span className="text-xl sm:text-2xl font-black tracking-tight text-[#008874] font-display">
-            TINGO
-          </span>
+
+          {/* Quick Logo Edit Button for Admin */}
+          {isAdmin && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setLogoModalOpen(true);
+              }}
+              title="Chỉnh sửa & Tải ảnh Logo lên"
+              className="absolute -top-1.5 -right-6 p-1.5 bg-slate-900/90 hover:bg-[#008874] text-white rounded-full shadow-lg opacity-80 group-hover/logo:opacity-100 transition-all hover:scale-110 cursor-pointer z-20 flex items-center gap-1 text-[10px]"
+            >
+              <Edit3 className="w-3 h-3" />
+            </button>
+          )}
         </div>
 
         {/* Desktop Navigation */}
@@ -295,6 +348,12 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         </div>
       )}
+
+      {/* Admin Logo Editor Modal */}
+      <LogoEditorModal
+        isOpen={logoModalOpen}
+        onClose={() => setLogoModalOpen(false)}
+      />
     </header>
   );
 };

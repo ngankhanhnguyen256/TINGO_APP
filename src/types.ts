@@ -43,6 +43,8 @@ export interface Product {
   badge?: string;
   rating: number;
   reviewsCount: number;
+  soldCount?: number; // Base sold count
+  initialSoldCount?: number;
   description: string;
   shortDesc: string;
   ingredients: string[];
@@ -85,6 +87,7 @@ export interface Order {
   }[];
   couponCode?: string;
   notes?: string;
+  updatedAt?: string;
   cancelledAt?: string;
   cancelledBy?: 'customer' | 'admin';
   cancelReason?: string;
@@ -182,9 +185,29 @@ export interface NewsletterData {
 export interface FooterData {
   brandDesc: string;
   address: string;
+  addressLink?: string; // Google Maps URL
   hotline: string;
+  hotlineLink?: string; // Direct call or custom link
   email: string;
+  emailLink?: string; // Mailto or contact link
+  facebookUrl?: string;
+  instagramUrl?: string;
+  youtubeUrl?: string;
+  tiktokUrl?: string;
+  zaloUrl?: string;
+  faqBannerUrl?: string; // Custom FAQ banner link
+  faqBannerTitle?: string;
+  faqBannerSubtitle?: string;
+  faqBannerImage?: string;
   copyright: string;
+}
+
+export interface LogoConfig {
+  type: 'badge' | 'image';
+  imageUrl?: string;
+  text?: string;
+  tagline?: string;
+  height?: number;
 }
 
 export interface CustomLandingBlock {
@@ -211,6 +234,7 @@ export interface TypographyConfig {
 }
 
 export interface LandingPageConfig {
+  logo?: LogoConfig;
   hero: HeroData;
   whyChoose: WhyChooseData;
   featuredShowcase: FeaturedShowcaseData;
