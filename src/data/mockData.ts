@@ -394,6 +394,104 @@ export const TESTIMONIALS: Testimonial[] = [
   },
 ];
 
+export const DEFAULT_VERTICAL_VIDEOS: {
+  badge: string;
+  titleLine1: string;
+  titleLine2: string;
+  subtitle: string;
+  items: {
+    id: string;
+    title: string;
+    author: string;
+    authorAvatar?: string;
+    videoUrl: string;
+    thumbnailUrl?: string;
+    viewsCount?: string;
+    likesCount?: string;
+    badge?: string;
+    linkedProductId?: string;
+    linkedProductName?: string;
+    linkedProductPrice?: number;
+  }[];
+} = {
+  badge: 'VIDEO TRẢI NGHIỆM THỰC TẾ (9:16)',
+  titleLine1: 'Khách Hàng & Chuyên Gia',
+  titleLine2: 'Nói Gì Về TINGO?',
+  subtitle: 'Xem video review thực tế, cách pha chế và trải nghiệm dinh dưỡng từ cộng đồng người dùng TINGO.',
+  items: [
+    {
+      id: 'vid-1',
+      title: '3 Phút Pha Bữa Sáng Vhealth Trà Xanh Cùng Nhung',
+      author: 'Hồng Nhung (Fitness Coach)',
+      authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
+      videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-healthy-smoothie-ingredients-and-preparation-41584-large.mp4',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1556911073-38141963c9e0?auto=format&fit=crop&w=600&q=80',
+      viewsCount: '48.5K',
+      likesCount: '3.2K',
+      badge: 'Bữa Sáng Nhanh',
+      linkedProductId: 'tingo-vhealth-duo',
+      linkedProductName: 'Bột Dinh Dưỡng Vhealth 2 Vị',
+      linkedProductPrice: 790000,
+    },
+    {
+      id: 'vid-2',
+      title: 'Tại Sao Nước Ion Kiềm Lượng Tử Quantum Lại Hot?',
+      author: 'Bác Sĩ Dinh Dưỡng Minh Quân',
+      authorAvatar: 'https://images.unsplash.com/photo-1537368910025-700350fe46c7?auto=format&fit=crop&w=200&q=80',
+      videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-pouring-fresh-water-into-a-glass-in-slow-motion-42571-large.mp4',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1548839140-29a749e1bc4e?auto=format&fit=crop&w=600&q=80',
+      viewsCount: '82.1K',
+      likesCount: '6.7K',
+      badge: 'Chuyên Gia Khuyên Dùng',
+      linkedProductId: 'tingo-quantum-water',
+      linkedProductName: 'Nước Ion Kiềm Quantum Hydrogen',
+      linkedProductPrice: 280000,
+    },
+    {
+      id: 'vid-3',
+      title: 'Nạp Năng Lượng Chạy Bộ 21KM Cùng Vsportgel',
+      author: 'Runner Hoàng Long (Marathon)',
+      authorAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&q=80',
+      videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-man-jogging-on-the-running-track-40813-large.mp4',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1476480862126-209bfaa8edc8?auto=format&fit=crop&w=600&q=80',
+      viewsCount: '31.9K',
+      likesCount: '2.8K',
+      badge: 'Thử Thách Thể Thao',
+      linkedProductId: 'tingo-vsportgel',
+      linkedProductName: 'Gel Năng Lượng Vsportgel',
+      linkedProductPrice: 650000,
+    },
+    {
+      id: 'vid-4',
+      title: 'Cà Phê Thảo Mộc Caphe Link Giữ Tỉnh Táo 8 Tiếng',
+      author: 'Quỳnh Anh (CEO Startup)',
+      authorAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=200&q=80',
+      videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-making-a-cup-of-fresh-coffee-41585-large.mp4',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?auto=format&fit=crop&w=600&q=80',
+      viewsCount: '54.2K',
+      likesCount: '4.1K',
+      badge: 'Dân Văn Phòng',
+      linkedProductId: 'tingo-caphe-link',
+      linkedProductName: 'Cà Phê Sức Khỏe Caphe Link',
+      linkedProductPrice: 380000,
+    },
+    {
+      id: 'vid-5',
+      title: 'Xịt Khoáng Quantum Cấp Ẩm Tức Thì Cho Da Nhạy Cảm',
+      author: 'Linh Đan (Beauty Blogger)',
+      authorAvatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=200&q=80',
+      videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-woman-spraying-her-face-with-thermal-water-43306-large.mp4',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&w=600&q=80',
+      viewsCount: '66.4K',
+      likesCount: '5.5K',
+      badge: 'Chăm Sóc Da',
+      linkedProductId: 'tingo-xit-khoang-quantum',
+      linkedProductName: 'Xịt Khoáng Nước Kiềm Quantum',
+      linkedProductPrice: 220000,
+    },
+  ],
+};
+
 export const SAMPLE_ORDERS: Order[] = [
   {
     id: 'TIN-89241',

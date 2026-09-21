@@ -1,5 +1,5 @@
 import { LandingPageConfig } from '../types';
-import { PRODUCTS, HEALTH_ARTICLES, TESTIMONIALS } from './mockData';
+import { PRODUCTS, HEALTH_ARTICLES, TESTIMONIALS, DEFAULT_VERTICAL_VIDEOS } from './mockData';
 
 export const DEFAULT_LANDING_CONFIG: LandingPageConfig = {
   logo: {
@@ -153,6 +153,7 @@ export const DEFAULT_LANDING_CONFIG: LandingPageConfig = {
     },
   ],
   testimonials: TESTIMONIALS,
+  verticalVideos: DEFAULT_VERTICAL_VIDEOS,
   articles: HEALTH_ARTICLES,
   newsletter: {
     badge: 'ƯU ĐÃI THÀNH VIÊN MỚI',

@@ -7,7 +7,7 @@ import { ProductCatalogSection } from './components/ProductCatalogSection';
 import { CertificationsSection } from './components/CertificationsSection';
 import { HealthBlogSection } from './components/HealthBlogSection';
 import { TestimonialsSection } from './components/TestimonialsSection';
-import { FaqBannerSection } from './components/FaqBannerSection';
+import { VerticalVideoCarouselSection } from './components/VerticalVideoCarouselSection';
 import { NewsletterSection } from './components/NewsletterSection';
 import { Footer } from './components/Footer';
 import { CartDrawer } from './components/CartDrawer';
@@ -323,8 +323,11 @@ function MainApp() {
         {/* Real Customer Testimonials (Banner Format) */}
         <TestimonialsSection />
 
-        {/* FAQ Banner with configurable URL link */}
-        <FaqBannerSection onOpenFaqModal={() => setStoryModalOpen(true)} />
+        {/* 9:16 Vertical Video Carousel (Reels / Shorts / TikTok format) */}
+        <VerticalVideoCarouselSection
+          onAddToCart={handleAddToCart}
+          onSelectProduct={(p) => setSelectedProduct(p)}
+        />
 
         {/* Health Knowledge & Blog */}
         <HealthBlogSection />

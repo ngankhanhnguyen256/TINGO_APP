@@ -61,101 +61,39 @@ export const FooterLinksEditorModal: React.FC<FooterLinksEditorModalProps> = ({ 
         {/* Form Body */}
         <div className="p-6 overflow-y-auto space-y-6">
           
-          {/* 1. Social Media Links */}
+          {/* 1. Contact Cards & Fanpage Links */}
           <div className="space-y-3">
             <h4 className="text-xs font-bold uppercase tracking-wider text-[#008874] flex items-center gap-1.5">
-              <Globe className="w-4 h-4" /> 1. Đường Dẫn Mạng Xã Hội (Social Icons)
-            </h4>
-            
-            <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
-              {/* Facebook */}
-              <div>
-                <label className="flex items-center gap-2 text-xs font-bold text-slate-700 mb-1">
-                  <Facebook className="w-3.5 h-3.5 text-blue-600" /> Link Facebook Fanpage:
-                </label>
-                <input
-                  type="url"
-                  placeholder="https://www.facebook.com/tingodrink"
-                  value={formData.facebookUrl || ''}
-                  onChange={(e) => handleChange('facebookUrl', e.target.value)}
-                  className="w-full px-3.5 py-2 text-xs rounded-xl bg-white border border-slate-200 focus:outline-none focus:ring-2 focus:ring-[#008874]"
-                />
-              </div>
-
-              {/* Instagram */}
-              <div>
-                <label className="flex items-center gap-2 text-xs font-bold text-slate-700 mb-1">
-                  <Instagram className="w-3.5 h-3.5 text-pink-600" /> Link Instagram Profile:
-                </label>
-                <input
-                  type="url"
-                  placeholder="https://www.instagram.com/tingodrink"
-                  value={formData.instagramUrl || ''}
-                  onChange={(e) => handleChange('instagramUrl', e.target.value)}
-                  className="w-full px-3.5 py-2 text-xs rounded-xl bg-white border border-slate-200 focus:outline-none focus:ring-2 focus:ring-[#008874]"
-                />
-              </div>
-
-              {/* YouTube */}
-              <div>
-                <label className="flex items-center gap-2 text-xs font-bold text-slate-700 mb-1">
-                  <Youtube className="w-3.5 h-3.5 text-red-600" /> Link YouTube Channel:
-                </label>
-                <input
-                  type="url"
-                  placeholder="https://www.youtube.com/@tingodrink"
-                  value={formData.youtubeUrl || ''}
-                  onChange={(e) => handleChange('youtubeUrl', e.target.value)}
-                  className="w-full px-3.5 py-2 text-xs rounded-xl bg-white border border-slate-200 focus:outline-none focus:ring-2 focus:ring-[#008874]"
-                />
-              </div>
-
-              {/* TikTok */}
-              <div>
-                <label className="flex items-center gap-2 text-xs font-bold text-slate-700 mb-1">
-                  <span className="text-slate-900 font-bold">♪</span> Link TikTok:
-                </label>
-                <input
-                  type="url"
-                  placeholder="https://www.tiktok.com/@tingodrink"
-                  value={formData.tiktokUrl || ''}
-                  onChange={(e) => handleChange('tiktokUrl', e.target.value)}
-                  className="w-full px-3.5 py-2 text-xs rounded-xl bg-white border border-slate-200 focus:outline-none focus:ring-2 focus:ring-[#008874]"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 2. Contact Cards Links */}
-          <div className="space-y-3">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-[#008874] flex items-center gap-1.5">
-              <Phone className="w-4 h-4" /> 2. Thông Tin Liên Hệ & Chuyển Hướng (Contact Cards)
+              <Phone className="w-4 h-4" /> 1. Thông Tin Liên Hệ Trực Tiếp (Contact Cards)
             </h4>
 
             <div className="space-y-3 bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
-              {/* Address */}
+              {/* Fanpage (Replaces Dia chi tru so) */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mb-1">
-                    <MapPin className="w-3.5 h-3.5 text-emerald-600" /> Địa chỉ hiển thị:
+                    <Facebook className="w-3.5 h-3.5 text-blue-600" /> Tên Fanpage hiển thị:
                   </label>
                   <input
                     type="text"
-                    placeholder="387C Lê Văn Khương, Tân Thới Hiệp, TP.HCM"
-                    value={formData.address}
-                    onChange={(e) => handleChange('address', e.target.value)}
+                    placeholder="Fanpage TINGO - Dinh Dưỡng Thuần Tự Nhiên"
+                    value={formData.fanpageName || ''}
+                    onChange={(e) => handleChange('fanpageName', e.target.value)}
                     className="w-full px-3.5 py-2 text-xs rounded-xl bg-white border border-slate-200 focus:outline-none focus:ring-2 focus:ring-[#008874]"
                   />
                 </div>
                 <div>
                   <label className="flex items-center gap-1.5 text-xs font-bold text-slate-700 mb-1">
-                    <LinkIcon className="w-3.5 h-3.5 text-slate-500" /> Link Google Maps chuyển hướng:
+                    <LinkIcon className="w-3.5 h-3.5 text-blue-600" /> Link URL Fanpage chuyển hướng:
                   </label>
                   <input
                     type="url"
-                    placeholder="https://maps.google.com/..."
-                    value={formData.addressLink || ''}
-                    onChange={(e) => handleChange('addressLink', e.target.value)}
+                    placeholder="https://www.facebook.com/tingodrink"
+                    value={formData.fanpageUrl || formData.facebookUrl || ''}
+                    onChange={(e) => {
+                      handleChange('fanpageUrl', e.target.value);
+                      handleChange('facebookUrl', e.target.value);
+                    }}
                     className="w-full px-3.5 py-2 text-xs rounded-xl bg-white border border-slate-200 focus:outline-none focus:ring-2 focus:ring-[#008874]"
                   />
                 </div>

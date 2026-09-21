@@ -12,7 +12,7 @@ export const ProductVisual: React.FC<ProductVisualProps> = ({
   imageKey,
   className = '',
   size = 'md',
-  fit = 'cover',
+  fit = 'contain',
 }) => {
   const [imgError, setImgError] = useState(false);
 
@@ -24,9 +24,9 @@ export const ProductVisual: React.FC<ProductVisualProps> = ({
   // Height classes based on size
   const sizeClasses = {
     thumb: 'h-full w-full',
-    sm: 'h-36',
-    md: 'h-52 sm:h-60',
-    lg: 'h-64 sm:h-80',
+    sm: 'h-32 sm:h-36',
+    md: 'h-full w-full max-h-[160px] sm:max-h-[220px]',
+    lg: 'h-60 sm:h-80',
     hero: 'h-72 sm:h-96 md:h-[420px]',
   }[size];
 
@@ -46,14 +46,12 @@ export const ProductVisual: React.FC<ProductVisualProps> = ({
     >
       {/* Render Custom Uploaded Image or Built-in Illustration */}
       {isCustomImage && !imgError ? (
-        <div className="relative z-10 w-full h-full flex items-center justify-center overflow-hidden">
+        <div className="relative z-10 w-full h-full flex items-center justify-center overflow-hidden p-1.5 sm:p-2.5">
           <img
             src={imageKey}
             alt="Sản phẩm TINGO"
             onError={() => setImgError(true)}
-            className={`w-full h-full ${
-              isThumb || fit === 'contain' ? 'object-contain p-1' : 'object-cover'
-            } transition-transform duration-500 hover:scale-105`}
+            className="max-h-full max-w-full w-auto h-auto object-contain transition-transform duration-300 group-hover:scale-105 drop-shadow-xs"
             referrerPolicy="no-referrer"
           />
         </div>

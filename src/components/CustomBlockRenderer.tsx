@@ -74,52 +74,6 @@ export const CustomBlockRenderer: React.FC<CustomBlockRendererProps> = ({
           </div>
         );
 
-      case 'faq':
-        return (
-          <div className="bg-white rounded-3xl p-6 sm:p-10 border border-emerald-100 shadow-sm space-y-6">
-            <div className="text-center max-w-2xl mx-auto space-y-2">
-              <span className="text-xs font-bold uppercase tracking-wider text-[#008874]">
-                HỎI ĐÁP & HỖ TRỢ
-              </span>
-              <h3 className="text-2xl sm:text-3xl font-black text-slate-900 font-display">
-                {block.title}
-              </h3>
-              {block.subtitle && (
-                <p className="text-slate-600 text-sm">{block.subtitle}</p>
-              )}
-            </div>
-
-            <div className="max-w-3xl mx-auto space-y-3">
-              {block.items?.map((item, idx) => {
-                const isOpen = expandedFaq === item.id || (!expandedFaq && idx === 0);
-                return (
-                  <div
-                    key={item.id}
-                    className="border border-slate-200 rounded-2xl overflow-hidden transition-all"
-                  >
-                    <button
-                      onClick={() => toggleFaq(item.id)}
-                      className="w-full flex items-center justify-between p-4 text-left font-bold text-sm text-slate-800 hover:bg-slate-50 transition-colors"
-                    >
-                      <span>{item.title}</span>
-                      <ChevronDown
-                        className={`w-4 h-4 text-slate-500 transition-transform ${
-                          isOpen ? 'rotate-180 text-emerald-600' : ''
-                        }`}
-                      />
-                    </button>
-                    {isOpen && (
-                      <div className="px-4 pb-4 pt-1 text-xs sm:text-sm text-slate-600 bg-slate-50/50 border-t border-slate-100 leading-relaxed">
-                        {item.desc}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        );
-
       case 'image_showcase':
       default:
         return (

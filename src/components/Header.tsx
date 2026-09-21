@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Search, User, ShoppingBag, Menu, X, ArrowRight, Sparkles, Sliders, ShieldCheck, Eye, EyeOff, Truck, LogOut, Gift, Edit3, Image as ImageIcon } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, User, ShoppingBag, Menu, X, ArrowRight, Sparkles, Sliders, ShieldCheck, Eye, EyeOff, Truck, LogOut, Gift, Edit3, Image as ImageIcon, Camera, Upload } from 'lucide-react';
 import { CartItem } from '../types';
 import { useVisualEditor } from '../context/VisualEditorContext';
 import { useCustomerAuth } from '../context/CustomerAuthContext';
@@ -24,12 +24,13 @@ export const Header: React.FC<HeaderProps> = ({
   activeSection,
   onNavigate,
 }) => {
-  const { config, isAdmin, isVisualEditActive, toggleVisualEdit } = useVisualEditor();
+  const { config, updateLogo, isAdmin, isVisualEditActive, toggleVisualEdit } = useVisualEditor();
   const { customer, isLoggedIn, openAuthModal, openProfileModal, logoutCustomer } = useCustomerAuth();
   const [isScrolled, setIsScrolled] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const [logoModalOpen, setLogoModalOpen] = useState(false);
+  const directLogoInputRef = useRef<HTMLInputElement>(null);
 
   const logo = config.logo || {
     type: 'badge',
@@ -68,6 +69,26 @@ export const Header: React.FC<HeaderProps> = ({
     setMobileMenuOpen(false);
   };
 
+  const handleDirectLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      if (dataUrl) {
+        updateLogo({
+          type: 'image',
+          imageUrl: dataUrl,
+          text: logo.text || 'TINGO',
+          tagline: logo.tagline,
+          height: logo.height || 44,
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
   return (
     <header
       id="tingo-header"
@@ -79,7 +100,15 @@ export const Header: React.FC<HeaderProps> = ({
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between">
         {/* Brand Logo */}
-        <div className="relative group/logo">
+        <div className="relative group/logo flex items-center gap-2">
+          <input
+            type="file"
+            ref={directLogoInputRef}
+            accept="image/*"
+            onChange={handleDirectLogoUpload}
+            className="hidden"
+          />
+
           <div
             onClick={() => onNavigate('hero')}
             className="flex items-center gap-2.5 cursor-pointer select-none transition-transform hover:opacity-95"
@@ -119,19 +148,18 @@ export const Header: React.FC<HeaderProps> = ({
             )}
           </div>
 
-          {/* Quick Logo Edit Button for Admin */}
-          {isAdmin && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                setLogoModalOpen(true);
-              }}
-              title="Chỉnh sửa & Tải ảnh Logo lên"
-              className="absolute -top-1.5 -right-6 p-1.5 bg-slate-900/90 hover:bg-[#008874] text-white rounded-full shadow-lg opacity-80 group-hover/logo:opacity-100 transition-all hover:scale-110 cursor-pointer z-20 flex items-center gap-1 text-[10px]"
-            >
-              <Edit3 className="w-3 h-3" />
-            </button>
-          )}
+          {/* Direct "Đổi Logo / Tải Ảnh" button - easily visible and accessible */}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setLogoModalOpen(true);
+            }}
+            title="Đổi Logo / Tải ảnh từ thiết bị"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-100/90 hover:bg-[#008874] text-emerald-800 hover:text-white text-[11px] font-bold transition-all shadow-xs border border-emerald-200 cursor-pointer"
+          >
+            <Camera className="w-3 h-3" />
+            <span className="hidden xs:inline">Đổi Logo</span>
+          </button>
         </div>
 
         {/* Desktop Navigation */}

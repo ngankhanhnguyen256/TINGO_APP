@@ -169,12 +169,12 @@ const ProductCardItem: React.FC<{
               : 'border-slate-200/90 hover:border-emerald-400'
           }`}
         >
-          {/* Product Image Stage */}
-          <div className="relative p-2.5 sm:p-4 bg-[#fbfdfc] flex items-center justify-center min-h-[140px] sm:min-h-[200px] md:min-h-[220px] overflow-hidden">
-            <ProductVisual imageKey={p.image} size="md" />
+          {/* Product Image Stage (Aspect Square Container - fits perfectly without distortion) */}
+          <div className="relative aspect-square w-full p-2 sm:p-3 bg-[#fbfdfc] flex items-center justify-center overflow-hidden border-b border-slate-100">
+            <ProductVisual imageKey={p.image} size="md" fit="contain" className="h-full w-full" />
 
             {/* Top Left Badges */}
-            <div className="absolute top-2 left-2 sm:top-3 sm:left-3 flex flex-col gap-1 z-10">
+            <div className="absolute top-2 left-2 sm:top-2.5 sm:left-2.5 flex flex-col gap-1 z-10">
               {isFirst && (
                 <span className="inline-flex items-center gap-1 text-[9px] sm:text-[10px] font-black px-2 sm:px-2.5 py-0.5 rounded-full bg-gradient-to-r from-amber-500 to-yellow-400 text-slate-950 shadow-xs">
                   <Trophy className="w-2.5 h-2.5 sm:w-3 sm:h-3" />
@@ -189,9 +189,9 @@ const ProductCardItem: React.FC<{
             </div>
 
             {/* Top Right Sold Counter Pill (Auto Increments: 2 clicks = +1 sold) */}
-            <div className="absolute top-2 right-2 sm:top-3 sm:right-3 z-10">
-              <span className="inline-flex items-center gap-1 text-[10px] sm:text-[11px] font-bold px-2 py-0.5 sm:px-2.5 sm:py-1 rounded-full bg-slate-900/80 backdrop-blur-sm text-emerald-300 shadow-xs border border-emerald-500/30">
-                <Flame className="w-3 h-3 text-amber-400 fill-amber-400" />
+            <div className="absolute top-2 right-2 sm:top-2.5 sm:right-2.5 z-10">
+              <span className="inline-flex items-center gap-1 text-[9px] sm:text-[11px] font-bold px-1.5 py-0.5 sm:px-2.5 sm:py-1 rounded-full bg-slate-900/80 backdrop-blur-sm text-emerald-300 shadow-xs border border-emerald-500/30">
+                <Flame className="w-2.5 h-2.5 sm:w-3 sm:h-3 text-amber-400 fill-amber-400" />
                 <span>Đã bán {formattedSold}</span>
               </span>
             </div>

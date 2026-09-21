@@ -184,6 +184,8 @@ export interface NewsletterData {
 
 export interface FooterData {
   brandDesc: string;
+  fanpageName?: string;
+  fanpageUrl?: string;
   address: string;
   addressLink?: string; // Google Maps URL
   hotline: string;
@@ -210,9 +212,32 @@ export interface LogoConfig {
   height?: number;
 }
 
+export interface VerticalVideoItem {
+  id: string;
+  title: string;
+  author: string;
+  authorAvatar?: string;
+  videoUrl: string; // Direct MP4/WebM, device uploaded video DataURL/Blob, or YouTube Shorts/TikTok
+  thumbnailUrl?: string; // Poster/fallback thumbnail
+  viewsCount?: string;
+  likesCount?: string;
+  badge?: string;
+  linkedProductId?: string;
+  linkedProductName?: string;
+  linkedProductPrice?: number;
+}
+
+export interface VerticalVideoSectionData {
+  badge: string;
+  titleLine1: string;
+  titleLine2: string;
+  subtitle: string;
+  items: VerticalVideoItem[];
+}
+
 export interface CustomLandingBlock {
   id: string;
-  type: 'promo_banner' | 'feature_grid' | 'faq' | 'image_showcase';
+  type: 'promo_banner' | 'feature_grid' | 'image_showcase' | 'video_reels';
   title: string;
   subtitle?: string;
   badge?: string;
@@ -241,6 +266,7 @@ export interface LandingPageConfig {
   products: Product[];
   certifications: CertItem[];
   testimonials: Testimonial[];
+  verticalVideos?: VerticalVideoSectionData;
   articles: HealthArticle[];
   newsletter: NewsletterData;
   footer: FooterData;

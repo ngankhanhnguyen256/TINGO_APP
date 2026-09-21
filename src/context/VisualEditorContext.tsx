@@ -8,6 +8,8 @@ import {
   FeaturedShowcaseData,
   Product,
   Testimonial,
+  VerticalVideoItem,
+  VerticalVideoSectionData,
   HealthArticle,
   CertItem,
   NewsletterData,
@@ -94,6 +96,13 @@ interface VisualEditorContextType {
   updateTestimonial: (id: string, item: Partial<Testimonial>) => void;
   removeTestimonial: (id: string) => void;
   
+  // Vertical Video Reels (9:16)
+  updateVerticalVideos: (data: Partial<VerticalVideoSectionData>) => void;
+  addVerticalVideoItem: (item: VerticalVideoItem) => void;
+  updateVerticalVideoItem: (id: string, item: Partial<VerticalVideoItem>) => void;
+  removeVerticalVideoItem: (id: string) => void;
+  reorderVerticalVideoItem: (id: string, direction: 'prev' | 'next') => void;
+  
   // Blog Articles
   addArticle: (item: HealthArticle) => void;
   updateArticle: (id: string, item: Partial<HealthArticle>) => void;
@@ -171,9 +180,10 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
           footer: { ...DEFAULT_LANDING_CONFIG.footer, ...(parsed.footer || {}) },
           products: parsed.products && parsed.products.length > 0 ? parsed.products : DEFAULT_LANDING_CONFIG.products,
           testimonials: parsed.testimonials && parsed.testimonials.length > 0 ? parsed.testimonials : DEFAULT_LANDING_CONFIG.testimonials,
+          verticalVideos: parsed.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos,
           articles: parsed.articles && parsed.articles.length > 0 ? parsed.articles : DEFAULT_LANDING_CONFIG.articles,
           certifications: parsed.certifications && parsed.certifications.length > 0 ? parsed.certifications : DEFAULT_LANDING_CONFIG.certifications,
-          customBlocks: parsed.customBlocks || [],
+          customBlocks: (parsed.customBlocks || []).filter((b: any) => b && b.type !== 'faq'),
         };
       }
     } catch (e) {
@@ -708,6 +718,106 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }));
   };
 
+  // Vertical Video Reels (9:16) Updaters
+  const updateVerticalVideos = (data: Partial<VerticalVideoSectionData>) => {
+    mutateConfig((prev) => ({
+      ...prev,
+      verticalVideos: {
+        ...(prev.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos || {
+          badge: 'VIDEO TRẢI NGHIỆM THỰC TẾ (9:16)',
+          titleLine1: 'Khách Hàng & Chuyên Gia',
+          titleLine2: 'Nói Gì Về TINGO?',
+          subtitle: 'Xem video review thực tế 9:16',
+          items: [],
+        }),
+        ...data,
+      },
+    }));
+  };
+
+  const addVerticalVideoItem = (item: VerticalVideoItem) => {
+    mutateConfig((prev) => {
+      const currentSection = prev.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos || {
+        badge: 'VIDEO TRẢI NGHIỆM THỰC TẾ (9:16)',
+        titleLine1: 'Khách Hàng & Chuyên Gia',
+        titleLine2: 'Nói Gì Về TINGO?',
+        subtitle: 'Xem video review thực tế 9:16',
+        items: [],
+      };
+      return {
+        ...prev,
+        verticalVideos: {
+          ...currentSection,
+          items: [item, ...(currentSection.items || [])],
+        },
+      };
+    });
+  };
+
+  const updateVerticalVideoItem = (id: string, data: Partial<VerticalVideoItem>) => {
+    mutateConfig((prev) => {
+      const currentSection = prev.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos || {
+        badge: 'VIDEO TRẢI NGHIỆM THỰC TẾ (9:16)',
+        titleLine1: 'Khách Hàng & Chuyên Gia',
+        titleLine2: 'Nói Gì Về TINGO?',
+        subtitle: 'Xem video review thực tế 9:16',
+        items: [],
+      };
+      return {
+        ...prev,
+        verticalVideos: {
+          ...currentSection,
+          items: (currentSection.items || []).map((v) => (v.id === id ? { ...v, ...data } : v)),
+        },
+      };
+    });
+  };
+
+  const removeVerticalVideoItem = (id: string) => {
+    mutateConfig((prev) => {
+      const currentSection = prev.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos || {
+        badge: 'VIDEO TRẢI NGHIỆM THỰC TẾ (9:16)',
+        titleLine1: 'Khách Hàng & Chuyên Gia',
+        titleLine2: 'Nói Gì Về TINGO?',
+        subtitle: 'Xem video review thực tế 9:16',
+        items: [],
+      };
+      return {
+        ...prev,
+        verticalVideos: {
+          ...currentSection,
+          items: (currentSection.items || []).filter((v) => v.id !== id),
+        },
+      };
+    });
+  };
+
+  const reorderVerticalVideoItem = (id: string, direction: 'prev' | 'next') => {
+    mutateConfig((prev) => {
+      const currentSection = prev.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos || {
+        badge: 'VIDEO TRẢI NGHIỆM THỰC TẾ (9:16)',
+        titleLine1: 'Khách Hàng & Chuyên Gia',
+        titleLine2: 'Nói Gì Về TINGO?',
+        subtitle: 'Xem video review thực tế 9:16',
+        items: [],
+      };
+      const items = [...(currentSection.items || [])];
+      const idx = items.findIndex((v) => v.id === id);
+      if (idx < 0) return prev;
+      const targetIdx = direction === 'prev' ? idx - 1 : idx + 1;
+      if (targetIdx < 0 || targetIdx >= items.length) return prev;
+      const [moved] = items.splice(idx, 1);
+      items.splice(targetIdx, 0, moved);
+      return {
+        ...prev,
+        verticalVideos: {
+          ...currentSection,
+          items,
+        },
+      };
+    });
+  };
+
   // Blog Articles Updaters
   const addArticle = (item: HealthArticle) => {
     mutateConfig((prev) => ({
@@ -1007,6 +1117,11 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
         addTestimonial,
         updateTestimonial,
         removeTestimonial,
+        updateVerticalVideos,
+        addVerticalVideoItem,
+        updateVerticalVideoItem,
+        removeVerticalVideoItem,
+        reorderVerticalVideoItem,
         addArticle,
         updateArticle,
         removeArticle,

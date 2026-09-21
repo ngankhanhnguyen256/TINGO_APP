@@ -18,7 +18,7 @@ import {
   BookOpen,
   Award,
   Megaphone,
-  HelpCircle,
+  Video,
   Check,
   Type,
   Database,
@@ -60,6 +60,7 @@ export const AdminToolbar: React.FC<AdminToolbarProps> = ({ onOpenJsonBackup, on
     addArticle,
     addCertification,
     addCustomBlock,
+    addVerticalVideoItem,
   } = useVisualEditor();
 
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -142,26 +143,17 @@ export const AdminToolbar: React.FC<AdminToolbarProps> = ({ onOpenJsonBackup, on
     setAddMenuOpen(false);
   };
 
-  const handleAddFaqBlock = () => {
-    const newFaq = {
-      id: `block-${Date.now()}`,
-      type: 'faq' as const,
-      title: 'Câu Hỏi Thường Gặp Về TINGO Organic',
-      subtitle: 'Giải đáp tất cả thắc mắc về nguồn gốc, cách pha và chính sách giao hàng',
-      items: [
-        {
-          id: 'faq-1',
-          title: 'Nước Hydrogen Quantum khác gì so với nước lọc thông thường?',
-          desc: 'Nước Quantum có độ kiềm tự nhiên pH 9.0+ và giàu khí Hydro hoạt tính hòa tan cao, giúp trung hòa axit dư thừa và thẩm thấu nhanh vào tế bào.',
-        },
-        {
-          id: 'faq-2',
-          title: 'Người ăn kiêng hoặc tiểu đường có dùng được bột Vhealth không?',
-          desc: 'Hoàn toàn phù hợp! Vhealth sử dụng đạm đậu Hà Lan thuần thực vật và đường isomalt năng lượng thấp tự nhiên, không làm tăng đường huyết đột ngột.',
-        },
-      ],
-    };
-    addCustomBlock(newFaq);
+  const handleAddVideoReel = () => {
+    addVerticalVideoItem({
+      id: `vid-${Date.now()}`,
+      title: 'Trải nghiệm pha chế bột dinh dưỡng Vhealth & Nước Quantum',
+      videoUrl: 'https://assets.mixkit.co/videos/preview/mixkit-woman-pouring-milk-into-a-glass-42845-large.mp4',
+      thumbnailUrl: 'https://images.unsplash.com/photo-1556881286-fc6915169721?w=800&auto=format&fit=crop&q=80',
+      author: 'tingo_nutrition',
+      authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=120&auto=format&fit=crop&q=80',
+      badge: 'Video Mới',
+      viewsCount: '1.2k',
+    });
     setAddMenuOpen(false);
   };
 
@@ -266,11 +258,11 @@ export const AdminToolbar: React.FC<AdminToolbarProps> = ({ onOpenJsonBackup, on
                 </button>
 
                 <button
-                  onClick={handleAddFaqBlock}
+                  onClick={handleAddVideoReel}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-emerald-600 text-slate-200 hover:text-white transition-colors cursor-pointer"
                 >
-                  <HelpCircle className="w-4 h-4 text-sky-400" />
-                  <span>Thêm Khối Câu Hỏi FAQ</span>
+                  <Video className="w-4 h-4 text-sky-400" />
+                  <span>Thêm Video Dọc 9:16 (Reels)</span>
                 </button>
               </div>
             )}

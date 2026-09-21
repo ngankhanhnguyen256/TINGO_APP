@@ -45,9 +45,10 @@ export const Footer: React.FC<FooterProps> = ({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  const addressHref =
-    footer.addressLink ||
-    `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(footer.address)}`;
+  const fanpageHref =
+    footer.fanpageUrl ||
+    footer.facebookUrl ||
+    'https://www.facebook.com/tingodrink';
   const hotlineHref =
     footer.hotlineLink || `tel:${footer.hotline.replace(/\s+/g, '')}`;
   const emailHref = footer.emailLink || `mailto:${footer.email}`;
@@ -59,7 +60,7 @@ export const Footer: React.FC<FooterProps> = ({
         {/* Main Footer Grid (Screenshot 5) */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-12 gap-10 lg:gap-8 pb-12 border-b border-emerald-900/60">
           
-          {/* Column 1: Brand & Tagline & Socials (Screenshot 5) */}
+          {/* Column 1: Brand & Tagline */}
           <div className="lg:col-span-4 space-y-5">
             {/* Logo */}
             <div className="flex items-center gap-2.5">
@@ -97,67 +98,20 @@ export const Footer: React.FC<FooterProps> = ({
               </p>
             </EditableElement>
 
-            {/* Social Icons with customizable links */}
-            <div className="flex items-center flex-wrap gap-2.5 pt-2">
-              <a
-                href={footer.facebookUrl || 'https://www.facebook.com/tingodrink'}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Facebook TINGO"
-                className="w-9 h-9 rounded-full bg-emerald-900/60 hover:bg-[#008874] text-emerald-100 flex items-center justify-center transition-colors border border-emerald-800/60"
-                title="Mở Facebook TINGO"
-              >
-                <Facebook className="w-4 h-4" />
-              </a>
-
-              <a
-                href={footer.instagramUrl || 'https://www.instagram.com/tingodrink'}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="Instagram TINGO"
-                className="w-9 h-9 rounded-full bg-emerald-900/60 hover:bg-[#008874] text-emerald-100 flex items-center justify-center transition-colors border border-emerald-800/60"
-                title="Mở Instagram TINGO"
-              >
-                <Instagram className="w-4 h-4" />
-              </a>
-
-              <a
-                href={footer.youtubeUrl || 'https://www.youtube.com/@tingodrink'}
-                target="_blank"
-                rel="noopener noreferrer"
-                aria-label="YouTube TINGO"
-                className="w-9 h-9 rounded-full bg-emerald-900/60 hover:bg-[#008874] text-emerald-100 flex items-center justify-center transition-colors border border-emerald-800/60"
-                title="Mở YouTube TINGO"
-              >
-                <Youtube className="w-4 h-4" />
-              </a>
-
-              {footer.zaloUrl && (
-                <a
-                  href={footer.zaloUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  aria-label="Zalo TINGO"
-                  className="w-9 h-9 rounded-full bg-emerald-900/60 hover:bg-[#008874] text-emerald-100 flex items-center justify-center transition-colors border border-emerald-800/60 font-black text-xs"
-                  title="Mở Zalo OA TINGO"
-                >
-                  <MessageCircle className="w-4 h-4" />
-                </a>
-              )}
-
-              {/* Admin Quick Trigger to Edit All Links */}
-              {isVisualEditActive && (
+            {/* Admin Quick Trigger to Edit All Links */}
+            {isVisualEditActive && (
+              <div className="pt-1">
                 <button
                   type="button"
                   onClick={() => setLinksModalOpen(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-[10px] shadow-sm transition-all cursor-pointer"
-                  title="Sửa tất cả liên kết Mạng Xã Hội, Địa Chỉ, Hotline, Email"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs shadow-sm transition-all cursor-pointer"
+                  title="Sửa tất cả liên kết Fanpage, Hotline, Email, FAQ"
                 >
-                  <LinkIcon className="w-3 h-3" />
-                  <span>Sửa Links Footer</span>
+                  <LinkIcon className="w-3.5 h-3.5" />
+                  <span>Cài đặt Links Chuyển Hướng Footer</span>
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           {/* Column 2: SẢN PHẨM (Screenshot 5) */}
@@ -246,30 +200,30 @@ export const Footer: React.FC<FooterProps> = ({
               )}
             </h4>
 
-            {/* Address Card (Auto Redirects to Google Maps) */}
+            {/* Fanpage Card (Auto Redirects to Facebook Fanpage) */}
             <EditableElement
-              label="Địa chỉ & Link Google Maps"
+              label="Fanpage & Link Fanpage"
               onEdit={() => setLinksModalOpen(true)}
             >
               <a
-                href={addressHref}
+                href={fanpageHref}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-3.5 p-3 rounded-2xl bg-emerald-950/70 border border-emerald-800/40 hover:border-emerald-500 hover:bg-emerald-900/60 transition-all group"
-                title="Nhấp để mở bản đồ vị trí chỉ đường Google Maps"
+                className="flex items-center gap-3.5 p-3 rounded-2xl bg-emerald-950/70 border border-emerald-800/40 hover:border-emerald-400 hover:bg-emerald-900/60 transition-all group"
+                title="Nhấp để chuyển hướng đến Fanpage chính thức"
               >
-                <div className="w-10 h-10 rounded-full bg-emerald-200/90 text-[#052319] flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
-                  <MapPin className="w-5 h-5" />
+                <div className="w-10 h-10 rounded-full bg-emerald-400 text-slate-950 flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform">
+                  <Facebook className="w-5 h-5" />
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-400 block">
-                      ĐỊA CHỈ TRỤ SỞ
+                      FANPAGE
                     </span>
                     <ExternalLink className="w-3 h-3 text-emerald-400/60 group-hover:text-emerald-300" />
                   </div>
-                  <span className="text-xs font-medium text-emerald-100 leading-snug block line-clamp-2">
-                    {footer.address}
+                  <span className="text-xs font-bold text-emerald-100 leading-snug block line-clamp-2">
+                    {footer.fanpageName || 'Fanpage TINGO - Dinh Dưỡng'}
                   </span>
                 </div>
               </a>
