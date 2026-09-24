@@ -22,6 +22,7 @@ import {
   Check,
   Type,
   Database,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { useVisualEditor } from '../../context/VisualEditorContext';
 
@@ -36,9 +37,14 @@ const FONT_LIST = [
 interface AdminToolbarProps {
   onOpenJsonBackup: () => void;
   onOpenOrdersModal?: () => void;
+  onOpenGoogleSheetsModal?: () => void;
 }
 
-export const AdminToolbar: React.FC<AdminToolbarProps> = ({ onOpenJsonBackup, onOpenOrdersModal }) => {
+export const AdminToolbar: React.FC<AdminToolbarProps> = ({
+  onOpenJsonBackup,
+  onOpenOrdersModal,
+  onOpenGoogleSheetsModal,
+}) => {
   const {
     isAdmin,
     isVisualEditActive,
@@ -414,7 +420,19 @@ export const AdminToolbar: React.FC<AdminToolbarProps> = ({ onOpenJsonBackup, on
               className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-emerald-700 hover:bg-emerald-600 text-white text-xs font-bold transition-colors cursor-pointer border border-emerald-500/80 shadow-xs"
             >
               <Database className="w-3.5 h-3.5 text-emerald-200" />
-              <span>Firebase: Đơn & Khách Hàng</span>
+              <span>Firebase</span>
+            </button>
+          )}
+
+          {/* Google Sheets Sync Manager Button */}
+          {onOpenGoogleSheetsModal && (
+            <button
+              onClick={onOpenGoogleSheetsModal}
+              title="Quản lý và Đồng bộ Bảng tính Google Sheets"
+              className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-teal-700 hover:bg-teal-600 text-white text-xs font-bold transition-colors cursor-pointer border border-teal-500/80 shadow-xs"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-teal-200" />
+              <span>Google Sheets</span>
             </button>
           )}
 

@@ -27,6 +27,7 @@ import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { notifyNewOrder } from '../lib/telegram';
 import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
+import { appendOrderToGoogleSheet, isAutoSyncEnabled } from '../lib/googleSheetsService';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -292,10 +293,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         console.warn('Local order storage note:', e);
       }
 
-      // 2. Persist order to Firebase Firestore & update Customer record
+      // 2. Persist order to Firebase Firestore & update Customer record (Fire-and-forget background sync)
       try {
         const cleanOrderPayload = sanitizeFirestoreData(newOrder);
-        await setDoc(doc(db, 'orders', newOrder.id), cleanOrderPayload);
+        setDoc(doc(db, 'orders', newOrder.id), cleanOrderPayload).catch((err) => {
+          console.warn('Firestore order sync warning:', err);
+        });
 
         // Also persist / update customer profile in Firestore & local state
         if (cleanPhone) {
@@ -310,11 +313,14 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             lastOrderAt: isoString,
             lastOrderId: newOrder.id,
           });
-          await setDoc(
+          setDoc(
             doc(db, 'customers', cleanPhone),
             customerProfileData,
             { merge: true }
-          );
+          ).catch((err) => {
+            console.warn('Firestore customer profile sync warning:', err);
+          });
+
           // Update customer auth state
           updateCustomerProfile({
             address: address.trim(),
@@ -325,14 +331,27 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           });
         }
       } catch (err) {
-        console.error('Firestore order sync error:', err);
+        console.warn('Firestore order sync error:', err);
       }
 
-      // 3. Notify Telegram Bot in real-time
+      // 3. Notify Telegram Bot in real-time in background
       try {
-        await notifyNewOrder(newOrder);
+        notifyNewOrder(newOrder).catch((err) => {
+          console.warn('Telegram new order alert background warning:', err);
+        });
       } catch (err) {
         console.warn('Telegram new order alert warning:', err);
+      }
+
+      // 4. Auto-append Order to Google Sheets (Backup Database)
+      if (isAutoSyncEnabled()) {
+        try {
+          appendOrderToGoogleSheet(newOrder).catch((err) => {
+            console.warn('Google Sheets background append notice:', err);
+          });
+        } catch (err) {
+          console.warn('Google Sheets trigger notice:', err);
+        }
       }
 
       // Increment today's count in state

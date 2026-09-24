@@ -1,12 +1,11 @@
 {
-  "projectId": "hypnic-wallaby-pghtt",
-  "appId": "1:671553010343:web:8e2bd9b41ef0be993cf982",
-  "apiKey": "AIzaSyChUKLgCsI2175r6icuVvp68SQ7671voLE",
-  "authDomain": "hypnic-wallaby-pghtt.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-tingodinhdngsngt-a34b6c3b-5974-4e4e-b44d-dbf5382aff7f",
-  "storageBucket": "hypnic-wallaby-pghtt.firebasestorage.app",
-  "messagingSenderId": "671553010343",
+  "projectId": "gen-lang-client-0117432603",
+  "appId": "1:981599492641:web:14a5c651b544076d8c2160",
+  "apiKey": "AIzaSyC6M87yH7lgT2Rho740ACja84UjoS8AodY",
+  "authDomain": "gen-lang-client-0117432603.firebaseapp.com",
+  "storageBucket": "gen-lang-client-0117432603.firebasestorage.app",
+  "messagingSenderId": "981599492641",
   "measurementId": "",
-  "oAuthClientId": "671553010343-br3juq98rlhdmo5d8lgr6krmbslcdd2t.apps.googleusercontent.com",
+  "oAuthClientId": "981599492641-cdd3o9s0m2njpsi7jfco15dmif1ispov.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

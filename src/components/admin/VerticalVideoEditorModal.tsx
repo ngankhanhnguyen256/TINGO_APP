@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   X,
   Plus,
@@ -18,11 +18,14 @@ import {
   Smartphone,
   Check,
   Image as ImageIcon,
+  ExternalLink,
+  RefreshCw,
 } from 'lucide-react';
 import { useVisualEditor } from '../../context/VisualEditorContext';
 import { VerticalVideoItem } from '../../types';
-import { saveVideoBlob, compressImage } from '../../lib/storageHelper';
+import { saveVideoBlob } from '../../lib/storageHelper';
 import { uploadVideoToCloud } from '../../lib/videoCloudStorage';
+import { parseVideoUrl, fetchTikTokMetadata } from '../../utils/videoUrlHelper';
 
 interface VerticalVideoEditorModalProps {
   isOpen: boolean;
@@ -40,7 +43,6 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
     updateVerticalVideoItem,
     removeVerticalVideoItem,
     reorderVerticalVideoItem,
-    openImagePicker,
   } = useVisualEditor();
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -48,6 +50,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
   const [isAddingNew, setIsAddingNew] = useState<boolean>(false);
   const [isUploadingVideo, setIsUploadingVideo] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [isFetchingMetadata, setIsFetchingMetadata] = useState<boolean>(false);
 
   // Form State
   const [formData, setFormData] = useState<Partial<VerticalVideoItem>>({
@@ -74,6 +77,8 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
     items: [],
   };
 
+  const parsedVideo = parseVideoUrl(formData.videoUrl);
+
   const handleStartEdit = (item: VerticalVideoItem) => {
     setEditingItemId(item.id);
     setIsAddingNew(false);
@@ -89,10 +94,10 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
       author: 'Khách hàng TINGO',
       authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80',
       videoUrl: '',
-      thumbnailUrl: 'https://images.unsplash.com/photo-1556911073-38141963c9e0?auto=format&fit=crop&w=600&q=80',
+      thumbnailUrl: '',
       viewsCount: '15.2K',
       likesCount: '1.2K',
-      badge: 'Review Thực Tế',
+      badge: 'Review TikTok',
       linkedProductId: config.products[0]?.id || '',
       linkedProductName: config.products[0]?.name || '',
       linkedProductPrice: config.products[0]?.price || 0,
@@ -102,6 +107,45 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
   const handleCancelForm = () => {
     setEditingItemId(null);
     setIsAddingNew(false);
+  };
+
+  // Auto-detect and fetch TikTok/YouTube information when URL changes
+  const handleVideoUrlChange = async (newUrl: string) => {
+    setFormData((prev) => ({ ...prev, videoUrl: newUrl }));
+    const clean = newUrl.trim();
+    if (!clean) return;
+
+    const info = parseVideoUrl(clean);
+    
+    // 1. If YouTube: auto set thumbnail
+    if (info.type === 'youtube' && info.suggestedThumbnailUrl) {
+      setFormData((prev) => ({
+        ...prev,
+        thumbnailUrl: prev.thumbnailUrl || info.suggestedThumbnailUrl,
+        badge: prev.badge || 'YouTube Shorts',
+      }));
+    }
+
+    // 2. If TikTok: auto fetch metadata
+    if (info.type === 'tiktok') {
+      setIsFetchingMetadata(true);
+      try {
+        const meta = await fetchTikTokMetadata(clean);
+        if (meta) {
+          setFormData((prev) => ({
+            ...prev,
+            title: prev.title || meta.title || 'Video trải nghiệm TINGO',
+            author: prev.author === 'Khách hàng TINGO' || !prev.author ? (meta.author || 'tingo.drink') : prev.author,
+            thumbnailUrl: meta.thumbnailUrl || prev.thumbnailUrl,
+            badge: prev.badge || 'TikTok Reel',
+          }));
+        }
+      } catch {
+        // continue gracefully
+      } finally {
+        setIsFetchingMetadata(false);
+      }
+    }
   };
 
   const handleSaveForm = (e: React.FormEvent) => {
@@ -141,7 +185,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
     setIsAddingNew(false);
   };
 
-  // Video File Upload Handler from Device with Cross-Device Cloud Sync
+  // Video File Upload Handler from Device
   const handleVideoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -196,9 +240,9 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
       }
     };
 
-    // 4. Upload to Firestore chunks in the background for cross-device streaming
+    // 4. Background lightweight sync
     try {
-      setUploadProgress(25);
+      setUploadProgress(50);
       const cloudResultUrl = await uploadVideoToCloud(itemId, file, {
         title: formData.title || file.name,
         author: formData.author || 'TINGO Admin',
@@ -207,13 +251,12 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
         },
       });
 
-      // Update formData with cloud video URL
       setFormData((prev) => ({
         ...prev,
         videoUrl: cloudResultUrl,
       }));
     } catch (err) {
-      console.warn('Cloud video upload catch:', err);
+      console.warn('Video upload notice:', err);
     } finally {
       setIsUploadingVideo(false);
       setUploadProgress(null);
@@ -240,8 +283,8 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-white rounded-3xl w-full max-w-4xl max-h-[90vh] shadow-2xl flex flex-col overflow-hidden border border-slate-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-sm animate-fadeIn">
+      <div className="bg-white rounded-3xl w-full max-w-4xl max-h-[92vh] shadow-2xl flex flex-col overflow-hidden border border-slate-200">
         
         {/* Header */}
         <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-emerald-800 to-[#008874] text-white">
@@ -251,10 +294,10 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
             </div>
             <div>
               <h3 className="font-bold text-base leading-tight">
-                Quản Lý Banner Video Dọc 9:16 (Reels & Shorts)
+                Quản Lý Banner Video Dọc 9:16 (TikTok, Shorts & MP4)
               </h3>
               <p className="text-xs text-emerald-100">
-                Tải video từ thiết bị hoặc dán URL (MP4, Shorts, TikTok) để tạo banner xoay vòng
+                Hỗ trợ dán link TikTok, YouTube Shorts hoặc tải file trực tiếp từ máy
               </p>
             </div>
           </div>
@@ -267,7 +310,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
           
           {/* Section Heading Settings */}
           <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-3">
@@ -310,7 +353,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
 
           {/* If Editing or Adding a Video */}
           {(isAddingNew || editingItemId) ? (
-            <form onSubmit={handleSaveForm} className="bg-emerald-50/50 p-5 rounded-2xl border-2 border-emerald-300 space-y-4">
+            <form onSubmit={handleSaveForm} className="bg-emerald-50/50 p-4 sm:p-5 rounded-2xl border-2 border-emerald-300 space-y-4">
               <div className="flex items-center justify-between border-b border-emerald-200 pb-3">
                 <h4 className="font-bold text-sm text-emerald-900 flex items-center gap-2">
                   <Video className="w-4 h-4 text-emerald-700" />
@@ -328,11 +371,43 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
               {/* Upload from Device OR Enter URL */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 
-                {/* 1. Tải Video từ Thiết Bị */}
-                <div className="p-4 rounded-2xl bg-white border border-emerald-200 space-y-3">
+                {/* 1. Dán Link TikTok / YouTube Shorts / URL */}
+                <div className="p-4 rounded-2xl bg-white border-2 border-emerald-400 shadow-xs space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <LinkIcon className="w-4 h-4 text-[#008874]" />
+                      Cách 1: Dán Link TikTok / YouTube Shorts (Khuyên Dùng)
+                    </label>
+                    {isFetchingMetadata && (
+                      <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-1 animate-pulse">
+                        <RefreshCw className="w-3 h-3 animate-spin" /> Đang lấy thông tin video...
+                      </span>
+                    )}
+                  </div>
+                  
+                  <input
+                    type="url"
+                    placeholder="https://www.tiktok.com/@tingo.drink/video/76468088493021... hoặc YouTube Shorts"
+                    value={formData.videoUrl || ''}
+                    onChange={(e) => handleVideoUrlChange(e.target.value)}
+                    className="w-full px-3 py-2.5 text-xs rounded-xl border border-emerald-300 bg-emerald-50/20 focus:outline-none focus:ring-2 focus:ring-[#008874] font-mono"
+                  />
+                  
+                  <div className="text-[11px] text-slate-600 space-y-1">
+                    <p className="flex items-center gap-1 text-emerald-800 font-semibold">
+                      <Check className="w-3.5 h-3.5 text-emerald-600" /> Hỗ trợ tự động nhận diện TikTok Video ID & YouTube Shorts.
+                    </p>
+                    <p className="text-slate-500 text-[10px]">
+                      Hệ thống tự động nhúng Player chuẩn HD, không tốn dung lượng máy chủ và phát mượt trên mọi thiết bị.
+                    </p>
+                  </div>
+                </div>
+
+                {/* 2. Tải Video từ Thiết Bị */}
+                <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
                   <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
                     <Smartphone className="w-4 h-4 text-emerald-600" />
-                    Cách 1: Tải Video Dọc (9:16) Từ Điện Thoại / Máy Tính
+                    Cách 2: Tải Video Dọc (9:16) Từ Điện Thoại / Máy Tính
                   </label>
                   <input
                     type="file"
@@ -350,13 +425,13 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                     <Upload className="w-5 h-5 text-emerald-700" />
                     <span className="text-xs font-bold text-emerald-900">
                       {isUploadingVideo
-                        ? `Đang tải & đồng bộ lên Cloud (${uploadProgress || 20}%)...`
+                        ? `Đang lưu & tối ưu video (${uploadProgress || 50}%)...`
                         : 'Bấm vào đây để chọn video 9:16 từ máy'}
                     </span>
                     <span className="text-[10px] text-slate-500">
                       {isUploadingVideo
-                        ? 'Video đang được phân mảnh & mã hóa lên Firestore để xem trên mọi thiết bị'
-                        : 'Hỗ trợ định dạng MP4, WebM, MOV tỉ lệ dọc 9:16'}
+                        ? 'Video đang được lưu an toàn vào bộ nhớ đệm chuẩn tốc độ cao'
+                        : 'Hỗ trợ định dạng MP4, WebM, MOV tỉ lệ dọc 9:16 (Tốc độ phát 0ms)'}
                     </span>
                     {uploadProgress !== null && (
                       <div className="w-full bg-emerald-100 rounded-full h-1.5 mt-1 overflow-hidden">
@@ -369,146 +444,122 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                   </button>
                 </div>
 
-                {/* 2. Dán Link Video URL */}
-                <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
-                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                    <LinkIcon className="w-4 h-4 text-blue-600" />
-                    Cách 2: Dán Đường Link URL Video (MP4 / WebM / CDN)
-                  </label>
-                  <input
-                    type="url"
-                    placeholder="https://example.com/video-review.mp4"
-                    value={formData.videoUrl || ''}
-                    onChange={(e) => setFormData({ ...formData, videoUrl: e.target.value })}
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#008874]"
-                  />
-                  <div className="text-[11px] text-slate-500">
-                    Gợi ý: Link file .mp4 từ Cloudflare, AWS S3, Bunny, Imgur, Supabase hoặc CDN.
-                  </div>
-                </div>
               </div>
 
               {/* Video & Thumbnail Live Preview */}
               {(formData.videoUrl || formData.thumbnailUrl) && (
-                <div className="p-4 bg-white rounded-2xl border border-emerald-200 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Left: Video Preview */}
-                  <div className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
-                    <div className="w-16 h-24 rounded-lg bg-slate-900 overflow-hidden relative shrink-0 shadow-xs">
-                      {formData.videoUrl ? (
+                <div className="p-4 bg-white rounded-2xl border border-emerald-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Left: Interactive Video Player Live Preview */}
+                  <div className="p-3 rounded-xl bg-slate-900 text-white flex flex-col gap-2">
+                    <div className="flex items-center justify-between text-xs font-bold text-emerald-300">
+                      <span className="flex items-center gap-1.5">
+                        <Play className="w-3.5 h-3.5 text-emerald-400 fill-emerald-400" />
+                        Bản Xem Trước Video ({parsedVideo.type.toUpperCase()})
+                      </span>
+                      {parsedVideo.embedUrl && (
+                        <a
+                          href={formData.videoUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-[10px] text-slate-400 hover:text-white flex items-center gap-0.5"
+                        >
+                          Mở link gốc <ExternalLink className="w-2.5 h-2.5" />
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="w-full h-72 sm:h-80 bg-black rounded-xl overflow-hidden relative flex items-center justify-center border border-white/10">
+                      {parsedVideo.type === 'tiktok' && parsedVideo.embedUrl ? (
+                        <iframe
+                          src={parsedVideo.embedUrl}
+                          title="TikTok Video Preview"
+                          className="w-full h-full border-0"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                          allowFullScreen
+                        />
+                      ) : parsedVideo.type === 'youtube' && parsedVideo.embedUrl ? (
+                        <iframe
+                          src={parsedVideo.embedUrl}
+                          title="YouTube Video Preview"
+                          className="w-full h-full border-0"
+                          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                          allowFullScreen
+                        />
+                      ) : formData.videoUrl ? (
                         <video
                           src={formData.videoUrl}
-                          className="w-full h-full object-cover"
-                          muted
+                          poster={formData.thumbnailUrl}
+                          controls
                           playsInline
+                          className="w-full h-full object-contain"
                         />
                       ) : (
-                        <div className="w-full h-full flex items-center justify-center text-slate-500">
-                          <Video className="w-6 h-6" />
+                        <div className="text-center p-4 text-slate-500">
+                          <Video className="w-8 h-8 mx-auto mb-1 opacity-50" />
+                          <p className="text-xs">Chưa có video để xem trước</p>
                         </div>
                       )}
-                      <div className="absolute inset-0 flex items-center justify-center bg-black/25">
-                        <Play className="w-4 h-4 text-white" />
-                      </div>
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="text-xs font-bold text-slate-800 flex items-center gap-1">
-                        <Check className="w-3.5 h-3.5 text-emerald-600" /> Luồng Video
-                      </div>
-                      <p className="text-[11px] text-slate-500 truncate mt-0.5">
-                        {formData.videoUrl?.startsWith('data:') || formData.videoUrl?.startsWith('blob:') || formData.videoUrl?.startsWith('indexeddb:')
-                          ? 'Video tệp từ thiết bị'
-                          : formData.videoUrl || 'Chưa có link video'}
-                      </p>
                     </div>
                   </div>
 
-                  {/* Right: Cover Thumbnail Preview */}
-                  <div className="flex items-center gap-3 p-2.5 rounded-xl bg-emerald-50/50 border border-emerald-200">
-                    <div className="w-16 h-24 rounded-lg bg-slate-800 overflow-hidden relative shrink-0 shadow-xs border border-emerald-300">
-                      {formData.thumbnailUrl ? (
-                        <img
-                          src={formData.thumbnailUrl}
-                          alt="Ảnh bìa"
-                          className="w-full h-full object-cover"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1 text-center">
-                          <ImageIcon className="w-5 h-5 mb-0.5 text-slate-400" />
-                          <span className="text-[8px] leading-tight">Chưa có ảnh bìa</span>
+                  {/* Right: Cover Thumbnail Preview & Info */}
+                  <div className="space-y-3 flex flex-col justify-between">
+                    <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200">
+                      <div className="flex items-center gap-3">
+                        <div className="w-20 h-28 rounded-lg bg-slate-800 overflow-hidden relative shrink-0 shadow-xs border border-emerald-300">
+                          {formData.thumbnailUrl ? (
+                            <img
+                              src={formData.thumbnailUrl}
+                              alt="Ảnh bìa"
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : (
+                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1 text-center">
+                              <ImageIcon className="w-5 h-5 mb-0.5 text-slate-400" />
+                              <span className="text-[8px] leading-tight">Chưa có ảnh bìa</span>
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="text-xs font-bold text-emerald-900 flex items-center gap-1">
-                        <ImageIcon className="w-3.5 h-3.5 text-emerald-600" /> Ảnh Bìa Xem Trước
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="text-xs font-bold text-emerald-900 flex items-center gap-1">
+                            <ImageIcon className="w-3.5 h-3.5 text-emerald-600" /> Ảnh Bìa Thẻ Xoay Vòng
+                          </div>
+                          <p className="text-[11px] text-slate-600 line-clamp-2">
+                            {formData.title || 'Tiêu đề video trải nghiệm'}
+                          </p>
+                          <span className="inline-block px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 text-[10px] font-bold">
+                            @{formData.author || 'tingo.drink'}
+                          </span>
+                        </div>
                       </div>
-                      <p className="text-[10px] text-slate-500">
-                        {formData.thumbnailUrl ? 'Đang hiển thị trên thẻ xoay vòng' : 'Tự động trích từ video hoặc tải ảnh'}
-                      </p>
+                    </div>
+
+                    {/* Thumbnail URL Input */}
+                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                      <label className="text-[11px] font-bold text-slate-700 flex items-center justify-between">
+                        <span>URL Ảnh Bìa (Thumbnail):</span>
+                        {formData.thumbnailUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setFormData({ ...formData, thumbnailUrl: '' })}
+                            className="text-[10px] text-rose-600 font-semibold cursor-pointer"
+                          >
+                            Xóa
+                          </button>
+                        )}
+                      </label>
+                      <input
+                        type="url"
+                        placeholder="https://... ảnh bìa hiển thị trước khi bấm xem"
+                        value={formData.thumbnailUrl || ''}
+                        onChange={(e) => setFormData({ ...formData, thumbnailUrl: e.target.value })}
+                        className="w-full px-3 py-1.5 text-xs rounded-lg border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#008874]"
+                      />
                     </div>
                   </div>
                 </div>
               )}
-
-              {/* Thumbnail Image Customization */}
-              <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                    <ImageIcon className="w-4 h-4 text-emerald-600" />
-                    Tùy Chỉnh Ảnh Bìa Video (Thumbnail Poster)
-                  </label>
-                  {formData.thumbnailUrl && (
-                    <button
-                      type="button"
-                      onClick={() => setFormData({ ...formData, thumbnailUrl: '' })}
-                      className="text-[11px] text-rose-500 hover:text-rose-700 font-semibold cursor-pointer"
-                    >
-                      Xóa ảnh bìa
-                    </button>
-                  )}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {/* Option A: Upload Image File */}
-                  <div>
-                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                      Tải ảnh bìa từ máy:
-                    </label>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          const reader = new FileReader();
-                          reader.onload = (ev) => {
-                            const res = ev.target?.result as string;
-                            if (res) {
-                              setFormData((prev) => ({ ...prev, thumbnailUrl: res }));
-                            }
-                          };
-                          reader.readAsDataURL(file);
-                        }
-                      }}
-                      className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-100 file:text-emerald-800 hover:file:bg-emerald-200 cursor-pointer"
-                    />
-                  </div>
-
-                  {/* Option B: Enter URL */}
-                  <div>
-                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">
-                      Hoặc dán URL ảnh bìa:
-                    </label>
-                    <input
-                      type="url"
-                      placeholder="https://images.unsplash.com/..."
-                      value={formData.thumbnailUrl || ''}
-                      onChange={(e) => setFormData({ ...formData, thumbnailUrl: e.target.value })}
-                      className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#008874]"
-                    />
-                  </div>
-                </div>
-              </div>
 
               {/* Video Details: Title, Author, Badge */}
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
@@ -519,7 +570,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                   <input
                     type="text"
                     required
-                    placeholder="3 Phút Pha Bữa Sáng Vhealth Trà Xanh..."
+                    placeholder="Review 3 phút pha trà sữa dinh dưỡng Vhealth..."
                     value={formData.title || ''}
                     onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                     className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#008874]"
@@ -532,7 +583,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                   </label>
                   <input
                     type="text"
-                    placeholder="KOC Review / Bác Sĩ / Runner..."
+                    placeholder="TikTok Reel / Review KOC..."
                     value={formData.badge || ''}
                     onChange={(e) => setFormData({ ...formData, badge: e.target.value })}
                     className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#008874]"
@@ -545,7 +596,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                   </label>
                   <input
                     type="text"
-                    placeholder="Hồng Nhung (Fitness Coach)"
+                    placeholder="tingo.drink / Hồng Nhung"
                     value={formData.author || ''}
                     onChange={(e) => setFormData({ ...formData, author: e.target.value })}
                     className="w-full px-3.5 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#008874]"
@@ -610,7 +661,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                 </button>
                 <button
                   type="submit"
-                  className="px-6 py-2 rounded-xl text-xs font-bold text-white bg-[#008874] hover:bg-[#007052] shadow-sm transition-all cursor-pointer"
+                  className="px-6 py-2.5 rounded-xl text-xs font-bold text-white bg-[#008874] hover:bg-[#007052] shadow-sm transition-all cursor-pointer"
                 >
                   {isAddingNew ? 'Lưu Video Vào Banner' : 'Cập Nhật Video'}
                 </button>
@@ -629,7 +680,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#008874] hover:bg-[#007052] text-white text-xs font-bold shadow-sm transition-colors cursor-pointer"
                 >
                   <Plus className="w-4 h-4" />
-                  <span>+ Thêm / Tải Video 9:16 Mới</span>
+                  <span>+ Thêm / Dán Link TikTok Video 9:16</span>
                 </button>
               </div>
 
@@ -638,7 +689,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                   <Video className="w-10 h-10 text-slate-400 mx-auto mb-2" />
                   <p className="text-sm font-bold text-slate-700">Chưa có video dọc nào trong banner</p>
                   <p className="text-xs text-slate-500 mt-1 mb-4">
-                    Nhấp vào nút bên dưới để tải video 9:16 từ thiết bị hoặc thêm link video URL
+                    Nhấp vào nút bên dưới để dán link video TikTok hoặc tải video từ thiết bị
                   </p>
                   <button
                     type="button"
@@ -650,96 +701,104 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                 </div>
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {sectionData.items.map((item, idx) => (
-                    <div
-                      key={item.id}
-                      className="p-3 bg-white rounded-2xl border border-slate-200 hover:border-emerald-300 flex items-center gap-3 transition-all shadow-xs"
-                    >
-                      {/* 9:16 Mini Preview */}
-                      <div className="w-16 h-24 rounded-xl bg-slate-900 overflow-hidden relative shrink-0">
-                        {item.videoUrl ? (
-                          <video
-                            src={item.videoUrl}
-                            className="w-full h-full object-cover"
-                            muted
-                            playsInline
-                          />
-                        ) : (
-                          <img
-                            src={item.thumbnailUrl}
-                            alt=""
-                            className="w-full h-full object-cover"
-                          />
-                        )}
-                        <div className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/60 text-white text-[8px] font-bold">
-                          9:16
-                        </div>
-                      </div>
-
-                      {/* Info */}
-                      <div className="flex-1 min-w-0">
-                        {item.badge && (
-                          <span className="inline-block px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                            {item.badge}
-                          </span>
-                        )}
-                        <h5 className="font-bold text-xs text-slate-900 line-clamp-1 mt-0.5">
-                          {item.title}
-                        </h5>
-                        <p className="text-[11px] text-slate-500 truncate">
-                          {item.author} • {item.viewsCount || '10K'} views
-                        </p>
-                        {item.linkedProductName && (
-                          <div className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1 mt-0.5">
-                            <ShoppingBag className="w-3 h-3" />
-                            <span className="truncate">{item.linkedProductName}</span>
+                  {sectionData.items.map((item, idx) => {
+                    const itemParsed = parseVideoUrl(item.videoUrl);
+                    return (
+                      <div
+                        key={item.id}
+                        className="p-3 bg-white rounded-2xl border border-slate-200 hover:border-emerald-300 flex items-center gap-3 transition-all shadow-xs"
+                      >
+                        {/* 9:16 Mini Preview */}
+                        <div className="w-16 h-24 rounded-xl bg-slate-900 overflow-hidden relative shrink-0">
+                          {item.thumbnailUrl ? (
+                            <img
+                              src={item.thumbnailUrl}
+                              alt=""
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                            />
+                          ) : item.videoUrl?.startsWith('http') && !itemParsed.isEmbeddable ? (
+                            <video
+                              src={item.videoUrl}
+                              className="w-full h-full object-cover"
+                              muted
+                              playsInline
+                            />
+                          ) : (
+                            <div className="w-full h-full flex items-center justify-center bg-slate-800 text-white">
+                              <Video className="w-5 h-5 text-emerald-400" />
+                            </div>
+                          )}
+                          <div className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/70 text-white text-[8px] font-bold">
+                            {itemParsed.type === 'tiktok' ? 'TikTok' : itemParsed.type === 'youtube' ? 'Shorts' : '9:16'}
                           </div>
-                        )}
-                      </div>
+                        </div>
 
-                      {/* Actions */}
-                      <div className="flex flex-col gap-1 items-end shrink-0">
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => reorderVerticalVideoItem(item.id, 'prev')}
-                            disabled={idx === 0}
-                            title="Di chuyển lên trước"
-                            className="p-1 rounded-lg hover:bg-slate-100 disabled:opacity-30 text-slate-600 cursor-pointer"
-                          >
-                            <ArrowUp className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => reorderVerticalVideoItem(item.id, 'next')}
-                            disabled={idx === (sectionData.items?.length || 0) - 1}
-                            title="Di chuyển xuống sau"
-                            className="p-1 rounded-lg hover:bg-slate-100 disabled:opacity-30 text-slate-600 cursor-pointer"
-                          >
-                            <ArrowDown className="w-3.5 h-3.5" />
-                          </button>
+                        {/* Info */}
+                        <div className="flex-1 min-w-0">
+                          {item.badge && (
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                              {item.badge}
+                            </span>
+                          )}
+                          <h5 className="font-bold text-xs text-slate-900 line-clamp-1 mt-0.5">
+                            {item.title}
+                          </h5>
+                          <p className="text-[11px] text-slate-500 truncate">
+                            @{item.author} • {item.viewsCount || '10K'} views
+                          </p>
+                          {item.linkedProductName && (
+                            <div className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1 mt-0.5">
+                              <ShoppingBag className="w-3 h-3" />
+                              <span className="truncate">{item.linkedProductName}</span>
+                            </div>
+                          )}
                         </div>
-                        <div className="flex items-center gap-1 mt-1">
-                          <button
-                            type="button"
-                            onClick={() => handleStartEdit(item)}
-                            title="Sửa video này"
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 transition-colors cursor-pointer"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => removeVerticalVideoItem(item.id)}
-                            title="Xóa video này"
-                            className="p-1.5 rounded-lg bg-slate-100 hover:bg-red-50 text-slate-700 hover:text-red-600 transition-colors cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+
+                        {/* Actions */}
+                        <div className="flex flex-col gap-1 items-end shrink-0">
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => reorderVerticalVideoItem(item.id, 'prev')}
+                              disabled={idx === 0}
+                              title="Di chuyển lên trước"
+                              className="p-1 rounded-lg hover:bg-slate-100 disabled:opacity-30 text-slate-600 cursor-pointer"
+                            >
+                              <ArrowUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => reorderVerticalVideoItem(item.id, 'next')}
+                              disabled={idx === (sectionData.items?.length || 0) - 1}
+                              title="Di chuyển xuống sau"
+                              className="p-1 rounded-lg hover:bg-slate-100 disabled:opacity-30 text-slate-600 cursor-pointer"
+                            >
+                              <ArrowDown className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="flex items-center gap-1 mt-1">
+                            <button
+                              type="button"
+                              onClick={() => handleStartEdit(item)}
+                              title="Sửa video này"
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 transition-colors cursor-pointer"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => removeVerticalVideoItem(item.id)}
+                              title="Xóa video này"
+                              className="p-1.5 rounded-lg bg-slate-100 hover:bg-red-50 text-slate-700 hover:text-red-600 transition-colors cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

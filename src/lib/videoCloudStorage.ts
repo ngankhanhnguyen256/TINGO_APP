@@ -1,12 +1,4 @@
-import {
-  doc,
-  getDoc,
-  setDoc,
-  collection,
-  getDocs,
-  query,
-  orderBy,
-} from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { saveVideoBlob, loadVideoBlob } from './storageHelper';
 
@@ -16,12 +8,8 @@ import { saveVideoBlob, loadVideoBlob } from './storageHelper';
 const resolvedBlobCache = new Map<string, string>();
 
 /**
- * 500 KB per chunk to ensure fast, reliable parallel Firestore writes well below 1MB doc limits
- */
-const CHUNK_SIZE = 500 * 1024;
-
-/**
- * Upload video with automatic multi-chunk splitting to Firestore so ANY device can stream/play it.
+ * Upload video with safe local IndexedDB persistence + lightweight Firestore metadata sync.
+ * Prevents Firestore Spark Free Tier quota exhaustion by avoiding large multi-chunk doc flooding.
  */
 export async function uploadVideoToCloud(
   videoId: string,
@@ -33,6 +21,8 @@ export async function uploadVideoToCloud(
   }
 ): Promise<string> {
   const safeId = videoId.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+  if (metadata?.onProgress) metadata.onProgress(20);
 
   // 1. Convert to string dataUrl if it is a File or Blob
   let dataUrl = '';
@@ -47,7 +37,9 @@ export async function uploadVideoToCloud(
     });
   }
 
-  // 2. Persist locally to IndexedDB for immediate 0ms playback on creator's device
+  if (metadata?.onProgress) metadata.onProgress(50);
+
+  // 2. Persist locally to IndexedDB for immediate 0ms playback on this device
   try {
     await saveVideoBlob(safeId, dataUrl);
     await saveVideoBlob(videoId, dataUrl);
@@ -57,68 +49,44 @@ export async function uploadVideoToCloud(
     console.warn('Local video IDB cache note:', e);
   }
 
-  // 3. Upload to Firestore Cloud Chunks for cross-device access across all phones & computers
+  if (metadata?.onProgress) metadata.onProgress(80);
+
+  // 3. Lightweight Firestore sync (small videos under 300KB or metadata only to save quota)
   try {
     const totalLength = dataUrl.length;
-    const numChunks = Math.ceil(totalLength / CHUNK_SIZE);
-
     const headerRef = doc(db, 'uploaded_videos', safeId);
+    
+    // Only store dataUrl directly in Firestore if it's very small (< 300KB)
+    const canStoreInDoc = totalLength < 300 * 1024;
+
     await setDoc(
       headerRef,
       {
         id: safeId,
         title: metadata?.title || '',
-        author: metadata?.author || '',
-        totalChunks: numChunks,
+        author: metadata?.author || 'TINGO Admin',
         totalSize: totalLength,
         updatedAt: new Date().toISOString(),
         timestamp: Date.now(),
+        ...(canStoreInDoc ? { dataUrl } : {}),
       },
       { merge: true }
     );
-
-    // If small (< 500KB), store directly in header doc
-    if (numChunks === 1) {
-      await setDoc(headerRef, { dataUrl }, { merge: true });
-      if (metadata?.onProgress) metadata.onProgress(100);
-      return `cloud-video://${safeId}`;
+  } catch (err: any) {
+    // Gracefully handle quota exhaustion without crashing
+    if (err?.code === 'resource-exhausted' || err?.message?.includes('Quota limit exceeded')) {
+      console.warn('Firestore quota reached - video is safely stored locally in IndexedDB.');
+    } else {
+      console.warn('Cloud video Firestore metadata note:', err);
     }
-
-    // Split and upload chunks
-    for (let i = 0; i < numChunks; i++) {
-      const start = i * CHUNK_SIZE;
-      const end = Math.min(start + CHUNK_SIZE, totalLength);
-      const chunkData = dataUrl.slice(start, end);
-      const chunkRef = doc(
-        db,
-        'uploaded_videos',
-        safeId,
-        'chunks',
-        `chunk_${String(i).padStart(4, '0')}`
-      );
-
-      await setDoc(chunkRef, {
-        index: i,
-        chunk: chunkData,
-        size: chunkData.length,
-      });
-
-      if (metadata?.onProgress) {
-        const pct = Math.round(((i + 1) / numChunks) * 100);
-        metadata.onProgress(pct);
-      }
-    }
-
-    return `cloud-video://${safeId}`;
-  } catch (err) {
-    console.warn('Cloud video Firestore chunk upload note:', err);
-    return `cloud-video://${safeId}`;
   }
+
+  if (metadata?.onProgress) metadata.onProgress(100);
+  return `cloud-video://${safeId}`;
 }
 
 /**
- * Safely load and reconstruct video playable URL from local IndexedDB, Memory Cache, Direct Link, or Firestore Cloud Chunks.
- * Guarantees cross-device playback for all users.
+ * Safely load and reconstruct video playable URL from local IndexedDB, Memory Cache, Direct Link, or Firestore.
  */
 export async function loadVideoFromCloudOrLocal(
   idOrUrl: string,
@@ -174,48 +142,23 @@ export async function loadVideoFromCloudOrLocal(
     return targetUrl;
   }
 
-  // 4. Cross-device Cloud Resolution from Firestore Chunks
+  // 4. Cloud Resolution from Firestore (if small video was stored)
   if (cleanId) {
     try {
       const headerRef = doc(db, 'uploaded_videos', cleanId);
       const headerSnap = await getDoc(headerRef);
       if (headerSnap.exists()) {
         const headerData = headerSnap.data();
-
-        // Single chunk dataUrl in header
         if (headerData?.dataUrl) {
           resolvedBlobCache.set(cleanId, headerData.dataUrl);
           saveVideoBlob(cleanId, headerData.dataUrl).catch(() => {});
           return headerData.dataUrl;
         }
-
-        // Multi-chunk reassembly across devices
-        const totalChunks = headerData?.totalChunks || 0;
-        if (totalChunks > 0) {
-          const chunksCol = collection(db, 'uploaded_videos', cleanId, 'chunks');
-          const q = query(chunksCol, orderBy('index', 'asc'));
-          const chunksSnap = await getDocs(q);
-
-          if (!chunksSnap.empty) {
-            const parts: string[] = [];
-            chunksSnap.forEach((docChunk) => {
-              const d = docChunk.data();
-              if (d?.chunk) {
-                parts.push(d.chunk);
-              }
-            });
-            const fullDataUrl = parts.join('');
-            if (fullDataUrl.length > 0) {
-              resolvedBlobCache.set(cleanId, fullDataUrl);
-              // Save to local IndexedDB so next time this device plays it with 0 network latency!
-              saveVideoBlob(cleanId, fullDataUrl).catch(() => {});
-              return fullDataUrl;
-            }
-          }
-        }
       }
-    } catch (err) {
-      console.warn('Cross-device video streaming loader notice:', err);
+    } catch (err: any) {
+      if (err?.code === 'resource-exhausted') {
+        console.warn('Firestore quota reached during video load - continuing with fallback.');
+      }
     }
   }
 

@@ -25,6 +25,7 @@ import { TextEditorModal } from './components/admin/TextEditorModal';
 import { ProductEditorModal } from './components/admin/ProductEditorModal';
 import { JsonBackupModal } from './components/admin/JsonBackupModal';
 import { AdminOrdersModal } from './components/admin/AdminOrdersModal';
+import { GoogleSheetsSyncModal } from './components/admin/GoogleSheetsSyncModal';
 import { UnsavedChangesModal } from './components/admin/UnsavedChangesModal';
 import { CustomerAuthProvider, useCustomerAuth } from './context/CustomerAuthContext';
 import { CustomerAuthModal } from './components/CustomerAuthModal';
@@ -46,6 +47,7 @@ function MainApp() {
   const { customer, isLoggedIn, openAuthModal } = useCustomerAuth();
   const [jsonBackupOpen, setJsonBackupOpen] = useState(false);
   const [adminOrdersOpen, setAdminOrdersOpen] = useState(false);
+  const [googleSheetsModalOpen, setGoogleSheetsModalOpen] = useState(false);
 
   // Persistent cart with Cookie + LocalStorage + Customer Cloud Sync
   const [cartItems, setCartItems] = useState<CartItem[]>(() => loadStoredCart());
@@ -420,6 +422,7 @@ function MainApp() {
       <AdminToolbar
         onOpenJsonBackup={() => setJsonBackupOpen(true)}
         onOpenOrdersModal={() => setAdminOrdersOpen(true)}
+        onOpenGoogleSheetsModal={() => setGoogleSheetsModalOpen(true)}
       />
       <AdminLoginModal />
       <ImagePickerModal />
@@ -430,6 +433,11 @@ function MainApp() {
         isOpen={adminOrdersOpen}
         onClose={() => setAdminOrdersOpen(false)}
         localOrders={orders}
+      />
+      <GoogleSheetsSyncModal
+        isOpen={googleSheetsModalOpen}
+        onClose={() => setGoogleSheetsModalOpen(false)}
+        orders={orders}
       />
       <UnsavedChangesModal />
 

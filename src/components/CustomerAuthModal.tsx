@@ -18,7 +18,7 @@ import {
   Eye,
   EyeOff,
 } from 'lucide-react';
-import { useCustomerAuth, ADMIN_CREDENTIALS } from '../context/CustomerAuthContext';
+import { useCustomerAuth, ADMIN_CREDENTIALS, normalizeVietnamesePhone } from '../context/CustomerAuthContext';
 import { useVisualEditor } from '../context/VisualEditorContext';
 
 export const CustomerAuthModal: React.FC = () => {
@@ -123,27 +123,26 @@ export const CustomerAuthModal: React.FC = () => {
     const errs: Record<string, string> = {};
 
     if (!regName.trim()) {
-      errs.name = 'Vui lòng nhập họ và tên';
-    } else if (regName.trim().length < 3) {
-      errs.name = 'Họ và tên phải có ít nhất 3 ký tự';
+      errs.name = 'Vui lòng nhập họ và tên của bạn';
+    } else if (regName.trim().length < 2) {
+      errs.name = 'Họ và tên phải có ít nhất 2 ký tự';
     }
 
-    const phoneRegex = /(84|0[3|5|7|8|9])+([0-9]{8})\b/;
-    const cleanPhone = regPhone.replace(/[\s.-]/g, '');
+    const cleanPhone = normalizeVietnamesePhone(regPhone);
     if (!cleanPhone) {
       errs.phone = 'Vui lòng nhập số điện thoại nhận hàng';
-    } else if (!phoneRegex.test(cleanPhone) || cleanPhone.length !== 10) {
-      errs.phone = 'Số điện thoại không hợp lệ (gồm 10 số, VD: 0901234567)';
+    } else if (cleanPhone.length !== 10 || !cleanPhone.startsWith('0')) {
+      errs.phone = 'Số điện thoại không hợp lệ (gồm 10 số, VD: 0901234567 hoặc 03x, 07x, 08x, 09x)';
     }
 
     if (regEmail.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(regEmail.trim())) {
-      errs.email = 'Địa chỉ email không đúng định dạng';
+      errs.email = 'Địa chỉ email không đúng định dạng (VD: example@gmail.com)';
     }
 
     if (!regPassword.trim()) {
       errs.password = 'Vui lòng tạo mật khẩu cho tài khoản';
     } else if (regPassword.trim().length < 6) {
-      errs.password = 'Mật khẩu phải có ít nhất 6 ký tự';
+      errs.password = 'Mật khẩu phải có ít nhất 6 ký tự để bảo mật';
     }
 
     setRegErrors(errs);
@@ -156,27 +155,36 @@ export const CustomerAuthModal: React.FC = () => {
     if (!validateRegister()) return;
 
     setIsRegSubmitting(true);
+    setRegErrors({});
+
+    // Safety timeout to prevent any UI freeze
+    const safetyTimer = setTimeout(() => {
+      setIsRegSubmitting(false);
+    }, 4000);
+
     try {
       const res = await registerCustomer({
-        name: regName,
-        phone: regPhone,
-        email: regEmail,
-        password: regPassword,
-        address: regAddress,
+        name: regName.trim(),
+        phone: regPhone.trim(),
+        email: regEmail.trim(),
+        password: regPassword.trim(),
+        address: regAddress.trim(),
         city: regCity,
         district: regDistrict,
       });
 
+      clearTimeout(safetyTimer);
+      setIsRegSubmitting(false);
+
       if (res.success) {
-        setIsRegSubmitting(false);
         closeAuthModal();
       } else {
-        setRegErrors({ form: res.error || 'Đăng ký thất bại. Vui lòng thử lại.' });
-        setIsRegSubmitting(false);
+        setRegErrors({ form: res.error || 'Đăng ký không thành công. Quý khách vui lòng thử lại.' });
       }
     } catch {
-      setRegErrors({ form: 'Đã có lỗi xảy ra trong quá trình đăng ký. Vui lòng thử lại.' });
+      clearTimeout(safetyTimer);
       setIsRegSubmitting(false);
+      setRegErrors({ form: 'Đã có lỗi xảy ra trong quá trình tạo tài khoản. Quý khách vui lòng thử lại.' });
     }
   };
 
@@ -561,9 +569,24 @@ export const CustomerAuthModal: React.FC = () => {
 
             {/* General form error */}
             {regErrors.form && (
-              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-2 text-rose-700 text-xs">
-                <AlertCircle className="w-4 h-4 shrink-0" />
-                <span>{regErrors.form}</span>
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl space-y-2 text-rose-700 text-xs">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{regErrors.form}</span>
+                </div>
+                {regErrors.form.includes('Đăng Nhập') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('login');
+                      setLoginIdentifier(regPhone);
+                    }}
+                    className="mt-1 w-full py-1.5 px-3 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <LogIn className="w-3.5 h-3.5" />
+                    <span>Chuyển sang Đăng Nhập với SĐT này</span>
+                  </button>
+                )}
               </div>
             )}
 

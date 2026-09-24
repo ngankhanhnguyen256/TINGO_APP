@@ -16,27 +16,18 @@ import {
   ArrowRight,
   X,
   Maximize2,
+  ExternalLink,
 } from 'lucide-react';
 import { useVisualEditor } from '../context/VisualEditorContext';
 import { Product, VerticalVideoItem } from '../types';
 import { VerticalVideoEditorModal } from './admin/VerticalVideoEditorModal';
 import { EditableElement } from './admin/EditableElement';
-import { loadVideoBlob } from '../lib/storageHelper';
 import { loadVideoFromCloudOrLocal } from '../lib/videoCloudStorage';
+import { parseVideoUrl } from '../utils/videoUrlHelper';
 
 interface VerticalVideoCarouselSectionProps {
   onAddToCart?: (product: Product, quantity?: number) => void;
   onSelectProduct?: (product: Product) => void;
-}
-
-// Helper to convert YouTube URL to embed URL
-function getYouTubeEmbedUrl(url: string): string | null {
-  if (!url) return null;
-  const ytMatch = url.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?|shorts)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/i);
-  if (ytMatch && ytMatch[1]) {
-    return `https://www.youtube-nocookie.com/embed/${ytMatch[1]}?autoplay=1&playsinline=1&rel=0&modestbranding=1`;
-  }
-  return null;
 }
 
 export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSectionProps> = ({
@@ -50,7 +41,6 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
   const [loadingVideoId, setLoadingVideoId] = useState<string | null>(null);
   const [muted, setMuted] = useState<boolean>(true);
   const [likedMap, setLikedMap] = useState<Record<string, boolean>>({});
-  const [videoLoadedMap, setVideoLoadedMap] = useState<Record<string, boolean>>({});
   const [resolvedVideoUrls, setResolvedVideoUrls] = useState<Record<string, string>>({});
 
   const carouselRef = useRef<HTMLDivElement>(null);
@@ -67,16 +57,19 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
 
   const items = sectionData.items || [];
 
-  // Load video blobs and cloud storage chunks for custom uploaded videos across all devices
+  // Load video blobs and cloud storage for custom uploaded videos
   useEffect(() => {
     let isMounted = true;
     const fetchBlobUrls = async () => {
       const resolved: Record<string, string> = {};
       for (const item of items) {
         try {
-          const resolvedUrl = await loadVideoFromCloudOrLocal(item.id, item.videoUrl);
-          if (resolvedUrl && isMounted) {
-            resolved[item.id] = resolvedUrl;
+          const parsed = parseVideoUrl(item.videoUrl);
+          if (parsed.type === 'cloud' || parsed.type === 'blob') {
+            const resolvedUrl = await loadVideoFromCloudOrLocal(item.id, item.videoUrl);
+            if (resolvedUrl && isMounted) {
+              resolved[item.id] = resolvedUrl;
+            }
           }
         } catch {
           // fallback to direct URL
@@ -104,9 +97,10 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
     const item = items.find((v) => v.id === id);
     if (!item) return;
 
-    // Check if it's a YouTube link -> open in modal
-    const ytEmbed = getYouTubeEmbedUrl(item.videoUrl);
-    if (ytEmbed) {
+    const parsed = parseVideoUrl(item.videoUrl);
+
+    // If it's TikTok or YouTube -> open full popup watch mode for optimal playback
+    if (parsed.type === 'tiktok' || parsed.type === 'youtube') {
       setActiveModalVideo(item);
       return;
     }
@@ -165,25 +159,6 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
     }
   };
 
-  const [isModalResolving, setIsModalResolving] = useState<boolean>(false);
-
-  // Instant on-demand video resolver for modal
-  useEffect(() => {
-    if (!activeModalVideo) return;
-    if (!resolvedVideoUrls[activeModalVideo.id]) {
-      setIsModalResolving(true);
-      loadVideoFromCloudOrLocal(activeModalVideo.id, activeModalVideo.videoUrl)
-        .then((res) => {
-          if (res) {
-            setResolvedVideoUrls((prev) => ({ ...prev, [activeModalVideo.id]: res }));
-          }
-        })
-        .finally(() => {
-          setIsModalResolving(false);
-        });
-    }
-  }, [activeModalVideo]);
-
   const openVideoModal = async (e: React.MouseEvent, item: VerticalVideoItem) => {
     e.stopPropagation();
     if (playingVideoId) {
@@ -194,8 +169,8 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
     setMuted(false); // Unmute for full experience in modal
     setActiveModalVideo(item);
 
-    // Pre-resolve immediately on click
-    if (!resolvedVideoUrls[item.id]) {
+    const parsed = parseVideoUrl(item.videoUrl);
+    if ((parsed.type === 'cloud' || parsed.type === 'blob') && !resolvedVideoUrls[item.id]) {
       const res = await loadVideoFromCloudOrLocal(item.id, item.videoUrl);
       if (res) {
         setResolvedVideoUrls((prev) => ({ ...prev, [item.id]: res }));
@@ -306,7 +281,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
               <button
                 onClick={() => setVideoModalOpen(true)}
                 className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-full bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs shadow-md transition-all cursor-pointer hover:scale-105"
-                title="Tải video 9:16 mới từ thiết bị hoặc sửa danh sách video"
+                title="Dán link TikTok hoặc sửa danh sách video"
               >
                 <Edit3 className="w-3.5 h-3.5" />
                 <span>Quản Lý Video 9:16</span>
@@ -343,11 +318,9 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
             const isPlaying = playingVideoId === item.id;
             const isLoadingThisVideo = loadingVideoId === item.id;
             const isLiked = likedMap[item.id];
-            const rawUrl = item.videoUrl || '';
-            const isDataUrl = rawUrl.startsWith('data:video/') || rawUrl.startsWith('data:application/');
-            const isDirectExternal = rawUrl.startsWith('http://') || rawUrl.startsWith('https://');
-            const effectiveVideoUrl = resolvedVideoUrls[item.id] || (isDirectExternal || isDataUrl ? rawUrl : undefined);
-            const isYouTube = !!getYouTubeEmbedUrl(effectiveVideoUrl || rawUrl);
+            const parsed = parseVideoUrl(item.videoUrl);
+            const isSocialVideo = parsed.type === 'tiktok' || parsed.type === 'youtube';
+            const effectiveVideoUrl = resolvedVideoUrls[item.id] || (item.videoUrl?.startsWith('http') ? item.videoUrl : undefined);
 
             return (
               <div
@@ -356,7 +329,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                 className="snap-start shrink-0 w-[240px] sm:w-[280px] md:w-[300px] aspect-[9/16] rounded-3xl bg-slate-900 relative overflow-hidden shadow-xl hover:shadow-2xl transition-all duration-300 group cursor-pointer border border-emerald-900/30 select-none hover:-translate-y-1"
               >
                 {/* 1. Underlying Crisp Thumbnail Poster Layer */}
-                {item.thumbnailUrl && (
+                {item.thumbnailUrl ? (
                   <img
                     src={item.thumbnailUrl}
                     alt={item.title}
@@ -369,10 +342,14 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                         'https://images.unsplash.com/photo-1556911073-38141963c9e0?auto=format&fit=crop&w=600&q=80';
                     }}
                   />
+                ) : (
+                  <div className="absolute inset-0 w-full h-full bg-slate-900 flex items-center justify-center">
+                    <Video className="w-12 h-12 text-slate-600" />
+                  </div>
                 )}
 
-                {/* 2. Video Player Element */}
-                {!isYouTube && effectiveVideoUrl && (
+                {/* 2. Direct HTML5 Video Player Element (for uploaded files) */}
+                {!isSocialVideo && effectiveVideoUrl && (
                   <video
                     ref={(el) => {
                       videoRefs.current[item.id] = el;
@@ -383,20 +360,10 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     loop
                     muted={muted}
                     preload="metadata"
-                    onLoadedData={() => {
-                      setVideoLoadedMap((prev) => ({ ...prev, [item.id]: true }));
-                    }}
                     className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
                       isPlaying ? 'opacity-100 z-5' : 'opacity-0 pointer-events-none'
                     }`}
                   />
-                )}
-                {isYouTube && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-black/40">
-                    <span className="text-[10px] text-white/80 bg-black/60 px-2 py-1 rounded-full">
-                      YouTube Reel
-                    </span>
-                  </div>
                 )}
 
                 {/* 3. Dark Gradients Overlay for legibility */}
@@ -404,20 +371,19 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
 
                 {/* 4. Top Controls & Badge */}
                 <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between z-20">
-                  {item.badge ? (
-                    <span className="px-2.5 py-0.5 sm:py-1 rounded-full bg-emerald-600/90 backdrop-blur-md text-white text-[10px] sm:text-[11px] font-bold shadow-md truncate max-w-[140px]">
-                      {item.badge}
-                    </span>
-                  ) : (
-                    <span className="px-2.5 py-0.5 rounded-full bg-black/50 backdrop-blur-md text-white text-[10px] font-bold">
-                      TINGO Reel
-                    </span>
-                  )}
+                  <span className={`px-2.5 py-0.5 sm:py-1 rounded-full text-white text-[10px] sm:text-[11px] font-bold shadow-md truncate max-w-[140px] flex items-center gap-1 ${
+                    parsed.type === 'tiktok'
+                      ? 'bg-black/80 border border-white/20'
+                      : parsed.type === 'youtube'
+                      ? 'bg-rose-600/90'
+                      : 'bg-emerald-600/90 backdrop-blur-md'
+                  }`}>
+                    {parsed.type === 'tiktok' ? '🎵 TikTok' : parsed.type === 'youtube' ? '▶ Shorts' : (item.badge || 'TINGO Reel')}
+                  </span>
 
                   {/* Top Action Icons: Sound Mute/Unmute, Fullscreen, Like */}
                   <div className="flex items-center gap-1.5">
-                    {/* Audio Mute/Unmute Toggle */}
-                    {isPlaying && (
+                    {isPlaying && !isSocialVideo && (
                       <button
                         onClick={toggleMute}
                         className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer"
@@ -434,7 +400,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     <button
                       onClick={(e) => openVideoModal(e, item)}
                       className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer"
-                      title="Phóng to toàn màn hình"
+                      title="Xem toàn màn hình"
                     >
                       <Maximize2 className="w-3.5 h-3.5" />
                     </button>
@@ -455,7 +421,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                   </div>
                 </div>
 
-                {/* 5. Center Play/Pause/Loading Indicator */}
+                {/* 5. Center Play Button */}
                 {isLoadingThisVideo ? (
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
                     <div className="w-12 h-12 rounded-full bg-black/70 text-white flex flex-col items-center justify-center shadow-xl backdrop-blur-xs">
@@ -550,13 +516,10 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
 
       {/* Fullscreen Video Reel Viewer Modal (Popup Watch Mode) */}
       {activeModalVideo && (() => {
-        const rawModalUrl = activeModalVideo.videoUrl || '';
-        const isDataModalUrl = rawModalUrl.startsWith('data:video/') || rawModalUrl.startsWith('data:application/');
-        const isDirectModalExternal = rawModalUrl.startsWith('http://') || rawModalUrl.startsWith('https://');
+        const parsed = parseVideoUrl(activeModalVideo.videoUrl);
         const modalEffectiveUrl =
           resolvedVideoUrls[activeModalVideo.id] ||
-          (isDirectModalExternal || isDataModalUrl ? rawModalUrl : undefined);
-        const ytEmbed = getYouTubeEmbedUrl(modalEffectiveUrl || rawModalUrl);
+          (activeModalVideo.videoUrl?.startsWith('http') ? activeModalVideo.videoUrl : undefined);
 
         return (
           <div
@@ -565,17 +528,34 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
             }}
             className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-950/90 backdrop-blur-md animate-fadeIn"
           >
-            <div className="relative w-full max-w-md aspect-[9/16] max-h-[92vh] rounded-3xl bg-black overflow-hidden shadow-2xl border border-white/10 flex flex-col justify-between">
+            <div className="relative w-full max-w-sm sm:max-w-md aspect-[9/16] max-h-[92vh] rounded-3xl bg-black overflow-hidden shadow-2xl border border-white/10 flex flex-col justify-between">
               
               {/* Top Bar */}
-              <div className="absolute top-4 left-4 right-4 z-20 flex items-center justify-between text-white">
+              <div className="absolute top-4 left-4 right-4 z-30 flex items-center justify-between text-white pointer-events-auto">
                 <div className="flex items-center gap-2">
-                  <span className="px-3 py-1 rounded-full bg-emerald-600 text-white text-xs font-bold">
-                    {activeModalVideo.badge || 'TINGO Reel'}
+                  <span className={`px-3 py-1 rounded-full text-white text-xs font-bold shadow-md ${
+                    parsed.type === 'tiktok'
+                      ? 'bg-black/80 border border-white/20'
+                      : parsed.type === 'youtube'
+                      ? 'bg-rose-600'
+                      : 'bg-emerald-600'
+                  }`}>
+                    {parsed.type === 'tiktok' ? '🎵 TikTok Video' : parsed.type === 'youtube' ? '▶ YouTube Shorts' : (activeModalVideo.badge || 'TINGO Reel')}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  {!ytEmbed && (
+                  {parsed.type === 'tiktok' && (
+                    <a
+                      href={activeModalVideo.videoUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-2 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center cursor-pointer"
+                      title="Mở trên ứng dụng TikTok"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  )}
+                  {parsed.type !== 'tiktok' && parsed.type !== 'youtube' && (
                     <button
                       onClick={toggleMute}
                       className="w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center cursor-pointer"
@@ -593,28 +573,22 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
               </div>
 
               {/* Video Player */}
-              <div className="relative w-full h-full flex items-center justify-center bg-black">
-                {activeModalVideo.thumbnailUrl && (
-                  <img
-                    src={activeModalVideo.thumbnailUrl}
-                    alt={activeModalVideo.title}
-                    className="absolute inset-0 w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                )}
-                {isModalResolving && (
-                  <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xs text-white">
-                    <div className="w-10 h-10 border-3 border-emerald-400 border-t-transparent rounded-full animate-spin mb-2" />
-                    <span className="text-xs text-emerald-200">Đang tải video đám mây...</span>
-                  </div>
-                )}
-                {ytEmbed ? (
+              <div className="relative w-full h-full flex items-center justify-center bg-black overflow-hidden">
+                {parsed.type === 'tiktok' && parsed.embedUrl ? (
                   <iframe
-                    src={ytEmbed}
+                    src={parsed.embedUrl}
+                    title={activeModalVideo.title}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                    className="w-full h-full border-0"
+                  />
+                ) : parsed.type === 'youtube' && parsed.embedUrl ? (
+                  <iframe
+                    src={parsed.embedUrl}
                     title={activeModalVideo.title}
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                     allowFullScreen
-                    className="relative z-10 w-full h-full border-0"
+                    className="w-full h-full border-0"
                   />
                 ) : modalEffectiveUrl ? (
                   <video
@@ -629,11 +603,16 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     preload="auto"
                     className="relative z-10 w-full h-full object-contain"
                   />
-                ) : null}
+                ) : (
+                  <div className="text-center text-slate-400 p-4">
+                    <Video className="w-12 h-12 mx-auto mb-2 opacity-50" />
+                    <p className="text-xs">Không tìm thấy nguồn phát video</p>
+                  </div>
+                )}
               </div>
 
               {/* Bottom Floating Navigation & Product Tag */}
-              <div className="absolute bottom-4 left-4 right-4 z-20 space-y-3 text-white">
+              <div className="absolute bottom-4 left-4 right-4 z-30 space-y-2.5 text-white bg-gradient-to-t from-black/90 via-black/60 to-transparent p-3 rounded-2xl">
                 <div>
                   <p className="text-xs font-bold text-emerald-300">@{activeModalVideo.author}</p>
                   <h3 className="text-sm font-bold mt-0.5 line-clamp-2">{activeModalVideo.title}</h3>
@@ -645,7 +624,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                       handleProductClick(e, activeModalVideo.linkedProductId);
                       setActiveModalVideo(null);
                     }}
-                    className="p-2.5 rounded-2xl bg-white/20 hover:bg-white/30 backdrop-blur-md border border-white/30 flex items-center justify-between cursor-pointer"
+                    className="p-2 rounded-xl bg-white/20 hover:bg-white/30 backdrop-blur-md border border-white/30 flex items-center justify-between cursor-pointer"
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       <ShoppingBag className="w-4 h-4 text-emerald-300 shrink-0" />
@@ -668,13 +647,13 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                 <div className="flex items-center justify-between pt-1">
                   <button
                     onClick={handlePrevModalVideo}
-                    className="px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    className="px-3 py-1.5 rounded-full bg-white/20 hover:bg-white/30 text-xs font-bold flex items-center gap-1 cursor-pointer"
                   >
                     <ChevronLeft className="w-4 h-4" /> Video Trước
                   </button>
                   <button
                     onClick={handleNextModalVideo}
-                    className="px-3 py-1.5 rounded-full bg-white/15 hover:bg-white/25 text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    className="px-3 py-1.5 rounded-full bg-white/20 hover:bg-white/30 text-xs font-bold flex items-center gap-1 cursor-pointer"
                   >
                     Video Kế Tiếp <ChevronRight className="w-4 h-4" />
                   </button>

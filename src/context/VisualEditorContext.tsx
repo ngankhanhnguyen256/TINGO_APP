@@ -170,6 +170,20 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
+        // Merge or replace sample mixkit video with real TikTok video
+        let loadedVideos = parsed.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos;
+        if (loadedVideos && loadedVideos.items && loadedVideos.items.length > 0 && DEFAULT_LANDING_CONFIG.verticalVideos?.items?.[0]) {
+          const hasMixkit = loadedVideos.items.some((it: any) => it.videoUrl && it.videoUrl.includes('mixkit'));
+          if (hasMixkit || !loadedVideos.items.some((it: any) => it.videoUrl && it.videoUrl.includes('7646808860979645703'))) {
+            loadedVideos = {
+              ...loadedVideos,
+              items: [
+                DEFAULT_LANDING_CONFIG.verticalVideos.items[0],
+                ...loadedVideos.items.filter((it: any) => it.id !== 'vid-1' && it.id !== 'vid-tiktok-tingo'),
+              ],
+            };
+          }
+        }
         return {
           ...DEFAULT_LANDING_CONFIG,
           ...parsed,
@@ -180,7 +194,7 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
           footer: { ...DEFAULT_LANDING_CONFIG.footer, ...(parsed.footer || {}) },
           products: parsed.products && parsed.products.length > 0 ? parsed.products : DEFAULT_LANDING_CONFIG.products,
           testimonials: parsed.testimonials && parsed.testimonials.length > 0 ? parsed.testimonials : DEFAULT_LANDING_CONFIG.testimonials,
-          verticalVideos: parsed.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos,
+          verticalVideos: loadedVideos,
           articles: parsed.articles && parsed.articles.length > 0 ? parsed.articles : DEFAULT_LANDING_CONFIG.articles,
           certifications: parsed.certifications && parsed.certifications.length > 0 ? parsed.certifications : DEFAULT_LANDING_CONFIG.certifications,
           customBlocks: (parsed.customBlocks || []).filter((b: any) => b && b.type !== 'faq'),

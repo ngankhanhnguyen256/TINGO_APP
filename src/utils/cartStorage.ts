@@ -80,6 +80,8 @@ export function loadStoredCart(): CartItem[] {
   return [];
 }
 
+let cloudCartTimer: NodeJS.Timeout | null = null;
+
 /**
  * Save cart items to both LocalStorage and Cookie
  */
@@ -95,16 +97,21 @@ export function saveStoredCart(items: CartItem[], customerPhone?: string) {
     // 2. Save to Cookie (persists across reloads & sessions for 30 days)
     setCookie(CART_COOKIE_NAME, jsonStr, 30);
 
-    // 3. If customer is logged in, sync to Firestore for cross-device persistence
+    // 3. If customer is logged in, sync to Firestore with debounce for cross-device persistence
     if (customerPhone) {
       const cleanPhone = customerPhone.trim().replace(/[\s.-]/g, '');
       if (cleanPhone) {
-        try {
-          const docRef = doc(db, 'customers', cleanPhone);
-          updateDoc(docRef, sanitizeFirestoreData({ savedCart: items })).catch(() => {});
-        } catch {
-          // ignore
-        }
+        if (cloudCartTimer) clearTimeout(cloudCartTimer);
+        cloudCartTimer = setTimeout(async () => {
+          try {
+            const docRef = doc(db, 'customers', cleanPhone);
+            await updateDoc(docRef, sanitizeFirestoreData({ savedCart: items }));
+          } catch (err: any) {
+            if (err?.code !== 'resource-exhausted') {
+              console.warn('Customer cart sync note:', err);
+            }
+          }
+        }, 1500);
       }
     }
   } catch (err) {
