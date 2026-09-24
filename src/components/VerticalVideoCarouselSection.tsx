@@ -47,6 +47,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
   const [videoModalOpen, setVideoModalOpen] = useState(false);
   const [activeModalVideo, setActiveModalVideo] = useState<VerticalVideoItem | null>(null);
   const [playingVideoId, setPlayingVideoId] = useState<string | null>(null);
+  const [loadingVideoId, setLoadingVideoId] = useState<string | null>(null);
   const [muted, setMuted] = useState<boolean>(true);
   const [likedMap, setLikedMap] = useState<Record<string, boolean>>({});
   const [videoLoadedMap, setVideoLoadedMap] = useState<Record<string, boolean>>({});
@@ -110,43 +111,54 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
       return;
     }
 
+    if (playingVideoId === id) {
+      const currentEl = videoRefs.current[id];
+      if (currentEl) currentEl.pause();
+      setPlayingVideoId(null);
+      return;
+    }
+
+    // Pause all other videos
+    Object.entries(videoRefs.current).forEach(([key, el]) => {
+      if (el && key !== id) {
+        el.pause();
+      }
+    });
+
     // Ensure resolved URL is loaded
-    if (!resolvedVideoUrls[id]) {
-      const res = await loadVideoFromCloudOrLocal(item.id, item.videoUrl);
-      if (res) {
-        setResolvedVideoUrls((prev) => ({ ...prev, [id]: res }));
+    let activeUrl = resolvedVideoUrls[id];
+    if (!activeUrl) {
+      setLoadingVideoId(id);
+      try {
+        const res = await loadVideoFromCloudOrLocal(item.id, item.videoUrl);
+        if (res) {
+          activeUrl = res;
+          setResolvedVideoUrls((prev) => ({ ...prev, [id]: res }));
+        }
+      } catch (err) {
+        console.warn('Video load catch:', err);
+      } finally {
+        setLoadingVideoId(null);
       }
     }
 
     const videoEl = videoRefs.current[id];
-    if (!videoEl) {
-      return;
-    }
-
-    if (playingVideoId === id) {
-      videoEl.pause();
-      setPlayingVideoId(null);
-    } else {
-      // Pause all other videos
-      Object.entries(videoRefs.current).forEach(([key, el]) => {
-        if (el && key !== id) {
-          el.pause();
-        }
-      });
-
+    if (videoEl) {
+      if (activeUrl && (!videoEl.src || videoEl.src === window.location.href)) {
+        videoEl.src = activeUrl;
+        videoEl.load();
+      }
       videoEl.muted = muted;
       try {
         await videoEl.play();
         setPlayingVideoId(id);
       } catch {
-        // Fallback with muted for autoplay permission compliance
         videoEl.muted = true;
         setMuted(true);
         try {
           await videoEl.play();
           setPlayingVideoId(id);
         } catch {
-          // If still blocked, fallback to modal
           setActiveModalVideo(item);
         }
       }
@@ -329,11 +341,12 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
         >
           {items.map((item) => {
             const isPlaying = playingVideoId === item.id;
+            const isLoadingThisVideo = loadingVideoId === item.id;
             const isLiked = likedMap[item.id];
             const rawUrl = item.videoUrl || '';
+            const isDataUrl = rawUrl.startsWith('data:video/') || rawUrl.startsWith('data:application/');
             const isDirectExternal = rawUrl.startsWith('http://') || rawUrl.startsWith('https://');
-            const isBlobOrLocal = rawUrl.startsWith('blob:') || rawUrl.startsWith('indexeddb://') || rawUrl.startsWith('local-video://');
-            const effectiveVideoUrl = resolvedVideoUrls[item.id] || (isDirectExternal && !rawUrl.startsWith('blob:') ? rawUrl : '');
+            const effectiveVideoUrl = resolvedVideoUrls[item.id] || (isDirectExternal || isDataUrl ? rawUrl : undefined);
             const isYouTube = !!getYouTubeEmbedUrl(effectiveVideoUrl || rawUrl);
 
             return (
@@ -359,7 +372,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                 )}
 
                 {/* 2. Video Player Element */}
-                {!isYouTube ? (
+                {!isYouTube && effectiveVideoUrl && (
                   <video
                     ref={(el) => {
                       videoRefs.current[item.id] = el;
@@ -377,7 +390,8 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                       isPlaying ? 'opacity-100 z-5' : 'opacity-0 pointer-events-none'
                     }`}
                   />
-                ) : (
+                )}
+                {isYouTube && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/40">
                     <span className="text-[10px] text-white/80 bg-black/60 px-2 py-1 rounded-full">
                       YouTube Reel
@@ -441,8 +455,14 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                   </div>
                 </div>
 
-                {/* 5. Center Play/Pause Indicator */}
-                {!isPlaying ? (
+                {/* 5. Center Play/Pause/Loading Indicator */}
+                {isLoadingThisVideo ? (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                    <div className="w-12 h-12 rounded-full bg-black/70 text-white flex flex-col items-center justify-center shadow-xl backdrop-blur-xs">
+                      <div className="w-6 h-6 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  </div>
+                ) : !isPlaying ? (
                   <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
                     <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-[#008874]/90 text-white flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform backdrop-blur-xs">
                       <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-white ml-0.5" />
@@ -531,10 +551,11 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
       {/* Fullscreen Video Reel Viewer Modal (Popup Watch Mode) */}
       {activeModalVideo && (() => {
         const rawModalUrl = activeModalVideo.videoUrl || '';
+        const isDataModalUrl = rawModalUrl.startsWith('data:video/') || rawModalUrl.startsWith('data:application/');
         const isDirectModalExternal = rawModalUrl.startsWith('http://') || rawModalUrl.startsWith('https://');
         const modalEffectiveUrl =
           resolvedVideoUrls[activeModalVideo.id] ||
-          (isDirectModalExternal && !rawModalUrl.startsWith('blob:') ? rawModalUrl : '');
+          (isDirectModalExternal || isDataModalUrl ? rawModalUrl : undefined);
         const ytEmbed = getYouTubeEmbedUrl(modalEffectiveUrl || rawModalUrl);
 
         return (
@@ -595,7 +616,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     allowFullScreen
                     className="relative z-10 w-full h-full border-0"
                   />
-                ) : (
+                ) : modalEffectiveUrl ? (
                   <video
                     ref={modalVideoRef}
                     src={modalEffectiveUrl}
@@ -608,7 +629,7 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     preload="auto"
                     className="relative z-10 w-full h-full object-contain"
                   />
-                )}
+                ) : null}
               </div>
 
               {/* Bottom Floating Navigation & Product Tag */}

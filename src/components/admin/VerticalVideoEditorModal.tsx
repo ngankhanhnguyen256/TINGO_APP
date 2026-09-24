@@ -47,6 +47,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
   const [editingItemId, setEditingItemId] = useState<string | null>(null);
   const [isAddingNew, setIsAddingNew] = useState<boolean>(false);
   const [isUploadingVideo, setIsUploadingVideo] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   // Form State
   const [formData, setFormData] = useState<Partial<VerticalVideoItem>>({
@@ -140,12 +141,13 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
     setIsAddingNew(false);
   };
 
-  // Video File Upload Handler from Device
-  const handleVideoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Video File Upload Handler from Device with Cross-Device Cloud Sync
+  const handleVideoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
     setIsUploadingVideo(true);
+    setUploadProgress(10);
 
     const tempVideoUrl = URL.createObjectURL(file);
     const itemId = editingItemId || formData.id || `vid-${Date.now()}`;
@@ -158,7 +160,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
       title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
     }));
 
-    // 2. Persist raw video binary directly in IndexedDB (Safe, Unlimited Size, 0 RAM overhead)
+    // 2. Persist raw video binary directly in IndexedDB for 0ms local playback
     saveVideoBlob(itemId, file).catch((err) => {
       console.warn('IndexedDB video blob store warning:', err);
     });
@@ -191,19 +193,31 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
         }
       } catch (err) {
         console.warn('Auto thumbnail capture notice:', err);
-      } finally {
-        setIsUploadingVideo(false);
       }
     };
 
-    video.onerror = () => {
-      setIsUploadingVideo(false);
-    };
+    // 4. Upload to Firestore chunks in the background for cross-device streaming
+    try {
+      setUploadProgress(25);
+      const cloudResultUrl = await uploadVideoToCloud(itemId, file, {
+        title: formData.title || file.name,
+        author: formData.author || 'TINGO Admin',
+        onProgress: (pct) => {
+          setUploadProgress(pct);
+        },
+      });
 
-    // Failsafe timeout to always clear loading indicator
-    setTimeout(() => {
+      // Update formData with cloud video URL
+      setFormData((prev) => ({
+        ...prev,
+        videoUrl: cloudResultUrl,
+      }));
+    } catch (err) {
+      console.warn('Cloud video upload catch:', err);
+    } finally {
       setIsUploadingVideo(false);
-    }, 500);
+      setUploadProgress(null);
+    }
   };
 
   const handleProductSelect = (productId: string) => {
@@ -331,15 +345,27 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploadingVideo}
-                    className="w-full py-3 px-4 border-2 border-dashed border-emerald-400 hover:border-emerald-600 hover:bg-emerald-50/70 rounded-xl text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-1.5"
+                    className="w-full py-3 px-4 border-2 border-dashed border-emerald-400 hover:border-emerald-600 hover:bg-emerald-50/70 rounded-xl text-center cursor-pointer transition-all flex flex-col items-center justify-center gap-1.5 relative overflow-hidden"
                   >
                     <Upload className="w-5 h-5 text-emerald-700" />
                     <span className="text-xs font-bold text-emerald-900">
-                      {isUploadingVideo ? 'Đang đọc video từ thiết bị...' : 'Bấm vào đây để chọn video 9:16 từ máy'}
+                      {isUploadingVideo
+                        ? `Đang tải & đồng bộ lên Cloud (${uploadProgress || 20}%)...`
+                        : 'Bấm vào đây để chọn video 9:16 từ máy'}
                     </span>
                     <span className="text-[10px] text-slate-500">
-                      Hỗ trợ định dạng MP4, WebM, MOV tỉ lệ dọc 9:16
+                      {isUploadingVideo
+                        ? 'Video đang được phân mảnh & mã hóa lên Firestore để xem trên mọi thiết bị'
+                        : 'Hỗ trợ định dạng MP4, WebM, MOV tỉ lệ dọc 9:16'}
                     </span>
+                    {uploadProgress !== null && (
+                      <div className="w-full bg-emerald-100 rounded-full h-1.5 mt-1 overflow-hidden">
+                        <div
+                          className="bg-emerald-600 h-full transition-all duration-300 rounded-full"
+                          style={{ width: `${uploadProgress}%` }}
+                        />
+                      </div>
+                    )}
                   </button>
                 </div>
 
