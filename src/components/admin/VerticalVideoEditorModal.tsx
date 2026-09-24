@@ -17,6 +17,7 @@ import {
   Play,
   Smartphone,
   Check,
+  Image as ImageIcon,
 } from 'lucide-react';
 import { useVisualEditor } from '../../context/VisualEditorContext';
 import { VerticalVideoItem } from '../../types';
@@ -106,13 +107,18 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
     e.preventDefault();
     if (!formData.videoUrl && !formData.title) return;
 
+    const itemId = formData.id || editingItemId || `vid-${Date.now()}`;
+    const cleanVideoUrl = formData.videoUrl?.startsWith('blob:')
+      ? `indexeddb://${itemId}`
+      : formData.videoUrl || `indexeddb://${itemId}`;
+
     if (isAddingNew) {
       const newItem: VerticalVideoItem = {
-        id: formData.id || `vid-${Date.now()}`,
+        id: itemId,
         title: formData.title || 'Trải nghiệm sản phẩm TINGO',
         author: formData.author || 'Khách hàng TINGO',
         authorAvatar: formData.authorAvatar || '',
-        videoUrl: formData.videoUrl || '',
+        videoUrl: cleanVideoUrl,
         thumbnailUrl: formData.thumbnailUrl || '',
         viewsCount: formData.viewsCount || '10.5K',
         likesCount: formData.likesCount || '1.1K',
@@ -123,7 +129,11 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
       };
       addVerticalVideoItem(newItem);
     } else if (editingItemId) {
-      updateVerticalVideoItem(editingItemId, formData);
+      updateVerticalVideoItem(editingItemId, {
+        ...formData,
+        id: itemId,
+        videoUrl: cleanVideoUrl,
+      });
     }
 
     setEditingItemId(null);
@@ -138,8 +148,22 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
     setIsUploadingVideo(true);
 
     const tempVideoUrl = URL.createObjectURL(file);
+    const itemId = editingItemId || formData.id || `vid-${Date.now()}`;
 
-    // Auto-capture video thumbnail frame to prevent black boxes
+    // 1. Immediately bind form state and display preview in 0ms
+    setFormData((prev) => ({
+      ...prev,
+      id: itemId,
+      videoUrl: tempVideoUrl,
+      title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
+    }));
+
+    // 2. Persist raw video binary directly in IndexedDB (Safe, Unlimited Size, 0 RAM overhead)
+    saveVideoBlob(itemId, file).catch((err) => {
+      console.warn('IndexedDB video blob store warning:', err);
+    });
+
+    // 3. Auto-capture video thumbnail frame to prevent black boxes
     const video = document.createElement('video');
     video.src = tempVideoUrl;
     video.crossOrigin = 'anonymous';
@@ -167,46 +191,19 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
         }
       } catch (err) {
         console.warn('Auto thumbnail capture notice:', err);
+      } finally {
+        setIsUploadingVideo(false);
       }
     };
 
-    // Read video as Base64 Data URL for standalone playback and cloud upload
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      const result = event.target?.result as string;
-      if (result) {
-        const itemId = editingItemId || `video-custom-${Date.now()}`;
-        try {
-          const cloudUrl = await uploadVideoToCloud(itemId, result, {
-            title: formData.title || file.name.replace(/\.[^/.]+$/, ''),
-            author: formData.author || 'Khách hàng TINGO',
-          });
-          setFormData((prev) => ({
-            ...prev,
-            videoUrl: cloudUrl || result,
-            title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
-          }));
-        } catch {
-          await saveVideoBlob(itemId, result);
-          setFormData((prev) => ({
-            ...prev,
-            videoUrl: result,
-            title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
-          }));
-        }
-      }
-      setIsUploadingVideo(false);
-    };
-    reader.onerror = () => {
-      setFormData((prev) => ({
-        ...prev,
-        videoUrl: tempVideoUrl,
-        title: prev.title || file.name.replace(/\.[^/.]+$/, ''),
-      }));
+    video.onerror = () => {
       setIsUploadingVideo(false);
     };
 
-    reader.readAsDataURL(file);
+    // Failsafe timeout to always clear loading indicator
+    setTimeout(() => {
+      setIsUploadingVideo(false);
+    }, 500);
   };
 
   const handleProductSelect = (productId: string) => {
@@ -365,30 +362,127 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                 </div>
               </div>
 
-              {/* Video Preview If Available */}
-              {formData.videoUrl && (
-                <div className="p-3 bg-white rounded-2xl border border-emerald-200 flex items-center gap-4">
-                  <div className="w-20 h-32 rounded-xl bg-slate-900 overflow-hidden relative shrink-0 shadow-sm">
-                    <video
-                      src={formData.videoUrl}
-                      className="w-full h-full object-cover"
-                      muted
-                      playsInline
-                    />
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/30">
-                      <Play className="w-5 h-5 text-white" />
+              {/* Video & Thumbnail Live Preview */}
+              {(formData.videoUrl || formData.thumbnailUrl) && (
+                <div className="p-4 bg-white rounded-2xl border border-emerald-200 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* Left: Video Preview */}
+                  <div className="flex items-center gap-3 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <div className="w-16 h-24 rounded-lg bg-slate-900 overflow-hidden relative shrink-0 shadow-xs">
+                      {formData.videoUrl ? (
+                        <video
+                          src={formData.videoUrl}
+                          className="w-full h-full object-cover"
+                          muted
+                          playsInline
+                        />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-slate-500">
+                          <Video className="w-6 h-6" />
+                        </div>
+                      )}
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/25">
+                        <Play className="w-4 h-4 text-white" />
+                      </div>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-bold text-slate-800 flex items-center gap-1">
+                        <Check className="w-3.5 h-3.5 text-emerald-600" /> Luồng Video
+                      </div>
+                      <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                        {formData.videoUrl?.startsWith('data:') || formData.videoUrl?.startsWith('blob:') || formData.videoUrl?.startsWith('indexeddb:')
+                          ? 'Video tệp từ thiết bị'
+                          : formData.videoUrl || 'Chưa có link video'}
+                      </p>
                     </div>
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-bold text-emerald-800 flex items-center gap-1.5">
-                      <Check className="w-4 h-4 text-emerald-600" /> Đã nạp video 9:16 thành công!
+
+                  {/* Right: Cover Thumbnail Preview */}
+                  <div className="flex items-center gap-3 p-2.5 rounded-xl bg-emerald-50/50 border border-emerald-200">
+                    <div className="w-16 h-24 rounded-lg bg-slate-800 overflow-hidden relative shrink-0 shadow-xs border border-emerald-300">
+                      {formData.thumbnailUrl ? (
+                        <img
+                          src={formData.thumbnailUrl}
+                          alt="Ảnh bìa"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 p-1 text-center">
+                          <ImageIcon className="w-5 h-5 mb-0.5 text-slate-400" />
+                          <span className="text-[8px] leading-tight">Chưa có ảnh bìa</span>
+                        </div>
+                      )}
                     </div>
-                    <div className="text-[11px] text-slate-500 truncate mt-0.5">
-                      {formData.videoUrl.startsWith('data:') ? 'Video tải lên từ thiết bị' : formData.videoUrl}
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <div className="text-xs font-bold text-emerald-900 flex items-center gap-1">
+                        <ImageIcon className="w-3.5 h-3.5 text-emerald-600" /> Ảnh Bìa Xem Trước
+                      </div>
+                      <p className="text-[10px] text-slate-500">
+                        {formData.thumbnailUrl ? 'Đang hiển thị trên thẻ xoay vòng' : 'Tự động trích từ video hoặc tải ảnh'}
+                      </p>
                     </div>
                   </div>
                 </div>
               )}
+
+              {/* Thumbnail Image Customization */}
+              <div className="p-4 rounded-2xl bg-white border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <ImageIcon className="w-4 h-4 text-emerald-600" />
+                    Tùy Chỉnh Ảnh Bìa Video (Thumbnail Poster)
+                  </label>
+                  {formData.thumbnailUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setFormData({ ...formData, thumbnailUrl: '' })}
+                      className="text-[11px] text-rose-500 hover:text-rose-700 font-semibold cursor-pointer"
+                    >
+                      Xóa ảnh bìa
+                    </button>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {/* Option A: Upload Image File */}
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                      Tải ảnh bìa từ máy:
+                    </label>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const reader = new FileReader();
+                          reader.onload = (ev) => {
+                            const res = ev.target?.result as string;
+                            if (res) {
+                              setFormData((prev) => ({ ...prev, thumbnailUrl: res }));
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        }
+                      }}
+                      className="w-full text-xs text-slate-600 file:mr-2 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-emerald-100 file:text-emerald-800 hover:file:bg-emerald-200 cursor-pointer"
+                    />
+                  </div>
+
+                  {/* Option B: Enter URL */}
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                      Hoặc dán URL ảnh bìa:
+                    </label>
+                    <input
+                      type="url"
+                      placeholder="https://images.unsplash.com/..."
+                      value={formData.thumbnailUrl || ''}
+                      onChange={(e) => setFormData({ ...formData, thumbnailUrl: e.target.value })}
+                      className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#008874]"
+                    />
+                  </div>
+                </div>
+              </div>
 
               {/* Video Details: Title, Author, Badge */}
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">

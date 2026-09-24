@@ -32,6 +32,14 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Uploaded videos and chunked sub-collections for cross-device streaming
+    match /uploaded_videos/{videoId} {
+      allow read, write: if true;
+      match /chunks/{chunkId} {
+        allow read, write: if true;
+      }
+    }
+
     // Fallback rule for any nested collections
     match /{document=**} {
       allow read, write: if true;

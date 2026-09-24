@@ -31,15 +31,15 @@ function openDB(): Promise<IDBDatabase> {
 }
 
 /**
- * Save large video blob/base64 to persistent IndexedDB
+ * Save video Blob, File or DataURL to persistent IndexedDB
  */
-export async function saveVideoBlob(id: string, dataUrlOrBlob: string): Promise<void> {
+export async function saveVideoBlob(id: string, dataOrBlob: Blob | File | string): Promise<void> {
   try {
     const db = await openDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction(VIDEO_STORE_NAME, 'readwrite');
       const store = tx.objectStore(VIDEO_STORE_NAME);
-      const req = store.put(dataUrlOrBlob, id);
+      const req = store.put(dataOrBlob, id);
       req.onsuccess = () => resolve();
       req.onerror = () => reject(req.error);
     });
@@ -49,7 +49,7 @@ export async function saveVideoBlob(id: string, dataUrlOrBlob: string): Promise<
 }
 
 /**
- * Load video blob/base64 from persistent IndexedDB
+ * Load video blob/base64 from persistent IndexedDB and convert to playable URL
  */
 export async function loadVideoBlob(id: string): Promise<string | null> {
   try {
@@ -58,7 +58,22 @@ export async function loadVideoBlob(id: string): Promise<string | null> {
       const tx = db.transaction(VIDEO_STORE_NAME, 'readonly');
       const store = tx.objectStore(VIDEO_STORE_NAME);
       const req = store.get(id);
-      req.onsuccess = () => resolve(req.result || null);
+      req.onsuccess = () => {
+        const res = req.result;
+        if (!res) {
+          resolve(null);
+          return;
+        }
+        if (typeof res === 'string') {
+          resolve(res);
+          return;
+        }
+        if (res instanceof Blob) {
+          resolve(URL.createObjectURL(res));
+          return;
+        }
+        resolve(null);
+      };
       req.onerror = () => reject(req.error);
     });
   } catch {
@@ -249,17 +264,13 @@ export async function sanitizeConfigImages(config: LandingPageConfig): Promise<L
       if (v.authorAvatar) {
         v.authorAvatar = (await sanitizeImageStr(v.authorAvatar)) || v.authorAvatar;
       }
-      // If videoUrl is a huge data URL, upload to cloud storage chunks and replace with reference
+      // If videoUrl is a data URL, securely save to persistent IndexedDB
       if (v.videoUrl && v.videoUrl.startsWith('data:video/')) {
         try {
-          const cloudRef = await uploadVideoToCloud(v.id, v.videoUrl, {
-            title: v.title,
-            author: v.author,
-          });
-          v.videoUrl = cloudRef;
-        } catch {
           await saveVideoBlob(v.id, v.videoUrl);
-          v.videoUrl = `cloud-video://${v.id}`;
+          v.videoUrl = `indexeddb://${v.id}`;
+        } catch (err) {
+          console.warn('Video save notice:', err);
         }
       }
     }

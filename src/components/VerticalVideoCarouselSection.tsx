@@ -72,16 +72,13 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
     const fetchBlobUrls = async () => {
       const resolved: Record<string, string> = {};
       for (const item of items) {
-        const urlOrId = item.videoUrl || item.id;
-        if (urlOrId) {
-          try {
-            const resolvedUrl = await loadVideoFromCloudOrLocal(urlOrId);
-            if (resolvedUrl && isMounted) {
-              resolved[item.id] = resolvedUrl;
-            }
-          } catch {
-            // fallback to direct URL
+        try {
+          const resolvedUrl = await loadVideoFromCloudOrLocal(item.id, item.videoUrl);
+          if (resolvedUrl && isMounted) {
+            resolved[item.id] = resolvedUrl;
           }
+        } catch {
+          // fallback to direct URL
         }
       }
       if (isMounted && Object.keys(resolved).length > 0) {
@@ -101,21 +98,28 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
     }
   };
 
-  const togglePlay = (id: string, e?: React.MouseEvent) => {
+  const togglePlay = async (id: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     const item = items.find((v) => v.id === id);
     if (!item) return;
 
-    // Check if it's a YouTube link -> open in modal directly
+    // Check if it's a YouTube link -> open in modal
     const ytEmbed = getYouTubeEmbedUrl(item.videoUrl);
     if (ytEmbed) {
       setActiveModalVideo(item);
       return;
     }
 
+    // Ensure resolved URL is loaded
+    if (!resolvedVideoUrls[id]) {
+      const res = await loadVideoFromCloudOrLocal(item.id, item.videoUrl);
+      if (res) {
+        setResolvedVideoUrls((prev) => ({ ...prev, [id]: res }));
+      }
+    }
+
     const videoEl = videoRefs.current[id];
     if (!videoEl) {
-      setActiveModalVideo(item);
       return;
     }
 
@@ -131,30 +135,44 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
       });
 
       videoEl.muted = muted;
-      const playPromise = videoEl.play();
-      if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            setPlayingVideoId(id);
-          })
-          .catch(() => {
-            // If autoplay policy blocks unmuted or inline, retry with muted or launch modal
-            videoEl.muted = true;
-            setMuted(true);
-            videoEl
-              .play()
-              .then(() => {
-                setPlayingVideoId(id);
-              })
-              .catch(() => {
-                setActiveModalVideo(item);
-              });
-          });
+      try {
+        await videoEl.play();
+        setPlayingVideoId(id);
+      } catch {
+        // Fallback with muted for autoplay permission compliance
+        videoEl.muted = true;
+        setMuted(true);
+        try {
+          await videoEl.play();
+          setPlayingVideoId(id);
+        } catch {
+          // If still blocked, fallback to modal
+          setActiveModalVideo(item);
+        }
       }
     }
   };
 
-  const openVideoModal = (e: React.MouseEvent, item: VerticalVideoItem) => {
+  const [isModalResolving, setIsModalResolving] = useState<boolean>(false);
+
+  // Instant on-demand video resolver for modal
+  useEffect(() => {
+    if (!activeModalVideo) return;
+    if (!resolvedVideoUrls[activeModalVideo.id]) {
+      setIsModalResolving(true);
+      loadVideoFromCloudOrLocal(activeModalVideo.id, activeModalVideo.videoUrl)
+        .then((res) => {
+          if (res) {
+            setResolvedVideoUrls((prev) => ({ ...prev, [activeModalVideo.id]: res }));
+          }
+        })
+        .finally(() => {
+          setIsModalResolving(false);
+        });
+    }
+  }, [activeModalVideo]);
+
+  const openVideoModal = async (e: React.MouseEvent, item: VerticalVideoItem) => {
     e.stopPropagation();
     if (playingVideoId) {
       const el = videoRefs.current[playingVideoId];
@@ -163,6 +181,14 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
     }
     setMuted(false); // Unmute for full experience in modal
     setActiveModalVideo(item);
+
+    // Pre-resolve immediately on click
+    if (!resolvedVideoUrls[item.id]) {
+      const res = await loadVideoFromCloudOrLocal(item.id, item.videoUrl);
+      if (res) {
+        setResolvedVideoUrls((prev) => ({ ...prev, [item.id]: res }));
+      }
+    }
   };
 
   // Keyboard navigation for modal
@@ -304,21 +330,26 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
           {items.map((item) => {
             const isPlaying = playingVideoId === item.id;
             const isLiked = likedMap[item.id];
-            const effectiveVideoUrl = resolvedVideoUrls[item.id] || item.videoUrl;
-            const isYouTube = !!getYouTubeEmbedUrl(effectiveVideoUrl);
+            const rawUrl = item.videoUrl || '';
+            const isDirectExternal = rawUrl.startsWith('http://') || rawUrl.startsWith('https://');
+            const isBlobOrLocal = rawUrl.startsWith('blob:') || rawUrl.startsWith('indexeddb://') || rawUrl.startsWith('local-video://');
+            const effectiveVideoUrl = resolvedVideoUrls[item.id] || (isDirectExternal && !rawUrl.startsWith('blob:') ? rawUrl : '');
+            const isYouTube = !!getYouTubeEmbedUrl(effectiveVideoUrl || rawUrl);
 
             return (
               <div
                 key={item.id}
-                onClick={(e) => openVideoModal(e, item)}
+                onClick={(e) => togglePlay(item.id, e)}
                 className="snap-start shrink-0 w-[240px] sm:w-[280px] md:w-[300px] aspect-[9/16] rounded-3xl bg-slate-900 relative overflow-hidden shadow-xl hover:shadow-2xl transition-all duration-300 group cursor-pointer border border-emerald-900/30 select-none hover:-translate-y-1"
               >
-                {/* 1. Underlying Crisp Thumbnail Poster Layer (Guarantees card is NEVER pitch black) */}
+                {/* 1. Underlying Crisp Thumbnail Poster Layer */}
                 {item.thumbnailUrl && (
                   <img
                     src={item.thumbnailUrl}
                     alt={item.title}
-                    className="absolute inset-0 w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                    className={`absolute inset-0 w-full h-full object-cover transition-all duration-500 ${
+                      isPlaying ? 'opacity-0 pointer-events-none' : 'opacity-100 group-hover:scale-105'
+                    }`}
                     referrerPolicy="no-referrer"
                     onError={(e) => {
                       (e.target as HTMLImageElement).src =
@@ -337,13 +368,13 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     poster={item.thumbnailUrl}
                     playsInline
                     loop
-                    muted={true}
+                    muted={muted}
                     preload="metadata"
                     onLoadedData={() => {
                       setVideoLoadedMap((prev) => ({ ...prev, [item.id]: true }));
                     }}
                     className={`absolute inset-0 w-full h-full object-cover transition-opacity duration-300 ${
-                      isPlaying ? 'opacity-100' : 'opacity-0 group-hover:opacity-60'
+                      isPlaying ? 'opacity-100 z-5' : 'opacity-0 pointer-events-none'
                     }`}
                   />
                 ) : (
@@ -355,10 +386,10 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                 )}
 
                 {/* 3. Dark Gradients Overlay for legibility */}
-                <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/25 to-black/40 pointer-events-none" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/95 via-black/25 to-black/40 pointer-events-none z-10" />
 
                 {/* 4. Top Controls & Badge */}
-                <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between z-10">
+                <div className="absolute top-3.5 left-3.5 right-3.5 flex items-center justify-between z-20">
                   {item.badge ? (
                     <span className="px-2.5 py-0.5 sm:py-1 rounded-full bg-emerald-600/90 backdrop-blur-md text-white text-[10px] sm:text-[11px] font-bold shadow-md truncate max-w-[140px]">
                       {item.badge}
@@ -369,12 +400,27 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     </span>
                   )}
 
-                  {/* Top Action Icons: Fullscreen, Mute & Like */}
+                  {/* Top Action Icons: Sound Mute/Unmute, Fullscreen, Like */}
                   <div className="flex items-center gap-1.5">
+                    {/* Audio Mute/Unmute Toggle */}
+                    {isPlaying && (
+                      <button
+                        onClick={toggleMute}
+                        className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer"
+                        title={muted ? 'Bật âm thanh' : 'Tắt tiếng'}
+                      >
+                        {muted ? (
+                          <VolumeX className="w-3.5 h-3.5 text-rose-400" />
+                        ) : (
+                          <Volume2 className="w-3.5 h-3.5 text-emerald-400" />
+                        )}
+                      </button>
+                    )}
+
                     <button
                       onClick={(e) => openVideoModal(e, item)}
                       className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-black/60 hover:bg-black/80 backdrop-blur-md text-white flex items-center justify-center transition-colors cursor-pointer"
-                      title="Mở toàn màn hình"
+                      title="Phóng to toàn màn hình"
                     >
                       <Maximize2 className="w-3.5 h-3.5" />
                     </button>
@@ -395,12 +441,20 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                   </div>
                 </div>
 
-                {/* 5. Center Play Indicator */}
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-10">
-                  <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-[#008874]/90 text-white flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform backdrop-blur-xs">
-                    <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-white ml-0.5" />
+                {/* 5. Center Play/Pause Indicator */}
+                {!isPlaying ? (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20">
+                    <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-full bg-[#008874]/90 text-white flex items-center justify-center shadow-xl group-hover:scale-110 transition-transform backdrop-blur-xs">
+                      <Play className="w-5 h-5 sm:w-6 sm:h-6 fill-white ml-0.5" />
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none z-20 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="w-12 h-12 rounded-full bg-black/60 text-white flex items-center justify-center backdrop-blur-xs">
+                      <Pause className="w-5 h-5 fill-white" />
+                    </div>
+                  </div>
+                )}
 
                 {/* 6. Bottom Metadata & Product Tag */}
                 <div className="absolute bottom-3.5 left-3.5 right-3.5 z-10 space-y-2 text-white">
@@ -476,8 +530,12 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
 
       {/* Fullscreen Video Reel Viewer Modal (Popup Watch Mode) */}
       {activeModalVideo && (() => {
-        const modalEffectiveUrl = resolvedVideoUrls[activeModalVideo.id] || activeModalVideo.videoUrl;
-        const ytEmbed = getYouTubeEmbedUrl(modalEffectiveUrl);
+        const rawModalUrl = activeModalVideo.videoUrl || '';
+        const isDirectModalExternal = rawModalUrl.startsWith('http://') || rawModalUrl.startsWith('https://');
+        const modalEffectiveUrl =
+          resolvedVideoUrls[activeModalVideo.id] ||
+          (isDirectModalExternal && !rawModalUrl.startsWith('blob:') ? rawModalUrl : '');
+        const ytEmbed = getYouTubeEmbedUrl(modalEffectiveUrl || rawModalUrl);
 
         return (
           <div
@@ -522,6 +580,12 @@ export const VerticalVideoCarouselSection: React.FC<VerticalVideoCarouselSection
                     className="absolute inset-0 w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
+                )}
+                {isModalResolving && (
+                  <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-xs text-white">
+                    <div className="w-10 h-10 border-3 border-emerald-400 border-t-transparent rounded-full animate-spin mb-2" />
+                    <span className="text-xs text-emerald-200">Đang tải video đám mây...</span>
+                  </div>
                 )}
                 {ytEmbed ? (
                   <iframe

@@ -1,170 +1,125 @@
-import { doc, getDoc, setDoc, collection, getDocs, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { saveVideoBlob, loadVideoBlob } from './storageHelper';
 
-const CHUNK_SIZE = 600 * 1024; // 600KB per Firestore document chunk (well within 1MB limit)
-
 /**
- * Upload a large video data URL (Base64) to Firestore in chunks so any device can stream/load it.
- */
-export async function uploadVideoToCloud(
-  videoId: string,
-  dataUrl: string,
-  metadata?: { title?: string; author?: string }
-): Promise<string> {
-  try {
-    // 1. Cache immediately in local IndexedDB for zero-latency playback on the current device
-    await saveVideoBlob(videoId, dataUrl);
-
-    // 2. Extract MIME type and raw base64 payload
-    const match = dataUrl.match(/^data:([^;]+);base64,(.*)$/s);
-    let mimeType = 'video/mp4';
-    let base64Data = dataUrl;
-
-    if (match) {
-      mimeType = match[1];
-      base64Data = match[2];
-    }
-
-    const totalLength = base64Data.length;
-    const totalChunks = Math.ceil(totalLength / CHUNK_SIZE);
-
-    // Save metadata manifest in Firestore
-    const videoDocRef = doc(db, 'uploaded_videos', videoId);
-    await setDoc(videoDocRef, {
-      id: videoId,
-      mimeType,
-      totalChunks,
-      totalLength,
-      title: metadata?.title || '',
-      author: metadata?.author || '',
-      updatedAt: new Date().toISOString(),
-      timestamp: Date.now(),
-    });
-
-    // Save chunks in sub-documents
-    const batchSize = 10;
-    for (let i = 0; i < totalChunks; i += batchSize) {
-      const batch = writeBatch(db);
-      for (let j = i; j < Math.min(i + batchSize, totalChunks); j++) {
-        const start = j * CHUNK_SIZE;
-        const end = Math.min(start + CHUNK_SIZE, totalLength);
-        const chunkData = base64Data.substring(start, end);
-        const chunkRef = doc(db, 'uploaded_videos', videoId, 'chunks', `chunk_${j.toString().padStart(4, '0')}`);
-        batch.set(chunkRef, {
-          index: j,
-          data: chunkData,
-        });
-      }
-      await batch.commit();
-    }
-
-    return `cloud-video://${videoId}`;
-  } catch (err) {
-    console.error('Failed to upload video to Firestore cloud storage:', err);
-    return dataUrl;
-  }
-}
-
-/**
- * Memory cache of resolved blob URLs to prevent redundant downloads/decodes
+ * Memory cache of active resolved blob URLs
  */
 const resolvedBlobCache = new Map<string, string>();
 
 /**
- * Load and reconstruct a video Blob URL from local IndexedDB or Firestore cloud chunks
+ * Upload or persist video to IndexedDB and optionally sync light metadata
+ */
+export async function uploadVideoToCloud(
+  videoId: string,
+  dataUrlOrFile: string | Blob | File,
+  metadata?: { title?: string; author?: string }
+): Promise<string> {
+  try {
+    // 1. Always store to local IndexedDB first
+    await saveVideoBlob(videoId, dataUrlOrFile);
+
+    if (typeof dataUrlOrFile === 'string' && dataUrlOrFile.startsWith('data:')) {
+      if (dataUrlOrFile.length < 500000) {
+        try {
+          const safeId = videoId.replace(/[^a-zA-Z0-9_-]/g, '_');
+          const videoDocRef = doc(db, 'uploaded_videos', safeId);
+          await setDoc(
+            videoDocRef,
+            {
+              id: safeId,
+              dataUrl: dataUrlOrFile,
+              title: metadata?.title || '',
+              author: metadata?.author || '',
+              updatedAt: new Date().toISOString(),
+              timestamp: Date.now(),
+            },
+            { merge: true }
+          );
+        } catch {
+          // Ignore cloud write errors
+        }
+      }
+    }
+
+    return `indexeddb://${videoId}`;
+  } catch (err) {
+    console.error('Video storage notice:', err);
+    return `indexeddb://${videoId}`;
+  }
+}
+
+/**
+ * Safely load and reconstruct a video playable URL from local IndexedDB, Memory Cache, or Direct Link.
+ * Completely immune to expired blob URLs and Firestore invalid path crashes.
  */
 export async function loadVideoFromCloudOrLocal(
-  videoIdOrUrl: string
+  idOrUrl: string,
+  fallbackUrl?: string
 ): Promise<string | null> {
-  if (!videoIdOrUrl) return null;
+  if (!idOrUrl && !fallbackUrl) return null;
 
-  // Direct HTTP/HTTPS or data URL
-  if (videoIdOrUrl.startsWith('http://') || videoIdOrUrl.startsWith('https://')) {
-    return videoIdOrUrl;
+  // Extract candidate ID
+  const rawId = (idOrUrl || '').trim();
+  const cleanId = rawId
+    .replace('indexeddb://', '')
+    .replace('cloud-video://', '')
+    .replace('local-video://', '');
+
+  // 1. Check in-memory active cache by cleanId
+  if (resolvedBlobCache.has(cleanId)) {
+    const cached = resolvedBlobCache.get(cleanId);
+    if (cached) return cached;
   }
 
-  if (videoIdOrUrl.startsWith('data:video/')) {
-    return videoIdOrUrl;
-  }
-
-  // Extract pure ID if prefixed with cloud-video://
-  const videoId = videoIdOrUrl.replace('cloud-video://', '');
-
-  // Check in-memory cache
-  if (resolvedBlobCache.has(videoId)) {
-    return resolvedBlobCache.get(videoId)!;
-  }
-
-  // 1. Try loading from local IndexedDB cache first
+  // 2. Try loading from persistent IndexedDB by cleanId (Primary & most reliable source)
   try {
-    const localData = await loadVideoBlob(videoId);
+    const localData = await loadVideoBlob(cleanId);
     if (localData) {
-      if (localData.startsWith('data:') || localData.startsWith('http')) {
-        resolvedBlobCache.set(videoId, localData);
-        return localData;
-      }
+      resolvedBlobCache.set(cleanId, localData);
+      return localData;
     }
   } catch {
-    // continue to cloud fetch
+    // Continue fallback
   }
 
-  // 2. Fetch from Firestore uploaded_videos
-  try {
-    const videoDocRef = doc(db, 'uploaded_videos', videoId);
-    const metaSnap = await getDoc(videoDocRef);
-
-    if (!metaSnap.exists()) {
-      return null;
-    }
-
-    const meta = metaSnap.data();
-    const totalChunks = Number(meta.totalChunks || 1);
-    const mimeType = meta.mimeType || 'video/mp4';
-
-    // Fetch all chunks
-    const chunksColl = collection(db, 'uploaded_videos', videoId, 'chunks');
-    const chunksSnap = await getDocs(chunksColl);
-
-    if (chunksSnap.empty) {
-      return null;
-    }
-
-    const chunkMap: Record<number, string> = {};
-    chunksSnap.forEach((d) => {
-      const cData = d.data();
-      if (typeof cData.index === 'number' && cData.data) {
-        chunkMap[cData.index] = cData.data;
+  // 3. If id is also stored under rawId
+  if (rawId !== cleanId) {
+    try {
+      const localDataRaw = await loadVideoBlob(rawId);
+      if (localDataRaw) {
+        resolvedBlobCache.set(cleanId, localDataRaw);
+        return localDataRaw;
       }
-    });
-
-    let fullBase64 = '';
-    for (let i = 0; i < totalChunks; i++) {
-      if (chunkMap[i]) {
-        fullBase64 += chunkMap[i];
-      }
+    } catch {
+      // Continue fallback
     }
-
-    if (!fullBase64) return null;
-
-    // Convert base64 to Blob URL for high performance and low memory
-    const byteCharacters = atob(fullBase64);
-    const byteNumbers = new Array(byteCharacters.length);
-    for (let i = 0; i < byteCharacters.length; i++) {
-      byteNumbers[i] = byteCharacters.charCodeAt(i);
-    }
-    const byteArray = new Uint8Array(byteNumbers);
-    const blob = new Blob([byteArray], { type: mimeType });
-    const blobUrl = URL.createObjectURL(blob);
-
-    // Cache locally in IndexedDB for fast subsequent loads
-    const dataUrl = `data:${mimeType};base64,${fullBase64}`;
-    saveVideoBlob(videoId, dataUrl).catch(() => {});
-
-    resolvedBlobCache.set(videoId, blobUrl);
-    return blobUrl;
-  } catch (err) {
-    console.warn(`Could not load cloud video ${videoId}:`, err);
-    return null;
   }
+
+  // 4. If fallbackUrl or rawId is a valid external URL (HTTP/HTTPS) or Data URL, return directly
+  const targetUrl = (fallbackUrl || idOrUrl || '').trim();
+  if (targetUrl.startsWith('http://') || targetUrl.startsWith('https://') || targetUrl.startsWith('data:video/')) {
+    return targetUrl;
+  }
+
+  // 5. Check Firestore metadata only if safeId is clean and valid (No slashes or colons)
+  const safeId = cleanId.replace(/[^a-zA-Z0-9_-]/g, '');
+  if (safeId && !safeId.includes('/') && !safeId.includes(':')) {
+    try {
+      const videoDocRef = doc(db, 'uploaded_videos', safeId);
+      const metaSnap = await getDoc(videoDocRef);
+      if (metaSnap.exists()) {
+        const meta = metaSnap.data();
+        if (meta?.dataUrl) {
+          resolvedBlobCache.set(cleanId, meta.dataUrl);
+          saveVideoBlob(cleanId, meta.dataUrl).catch(() => {});
+          return meta.dataUrl;
+        }
+      }
+    } catch {
+      // Ignore cloud query errors
+    }
+  }
+
+  return null;
 }

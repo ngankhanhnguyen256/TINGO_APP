@@ -212,42 +212,40 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const [isAutoSaving, setIsAutoSaving] = useState<boolean>(false);
   const [unsavedConfirmModalOpen, setUnsavedConfirmModalOpen] = useState<boolean>(false);
 
-  // Initial cloud config hydration from Firestore & IndexedDB
+  // Real-time Cloud Config Synchronization from Firestore across all devices
   useEffect(() => {
     let isMounted = true;
-    const fetchCloudConfig = async () => {
-      try {
-        // 1. First check IndexedDB for any cached configuration
-        const idbSaved = await loadFromIndexedDB(STORAGE_KEY);
-        if (idbSaved && isMounted) {
-          try {
-            const parsedIdb = JSON.parse(idbSaved);
-            if (parsedIdb?.hero && Array.isArray(parsedIdb?.products)) {
-              if (parsedIdb.customBlocks) {
-                parsedIdb.customBlocks = parsedIdb.customBlocks.filter((b: any) => b && b.type !== 'faq');
-              }
-              setConfig((prev) => ({ ...prev, ...parsedIdb }));
-            }
-          } catch {
-            // ignore
-          }
-        }
 
-        // 2. Fetch latest from Firestore
-        const snap = await getDoc(doc(db, 'settings', 'landingConfig'));
+    // 1. Quick initial load from IndexedDB cache for instant render
+    loadFromIndexedDB(STORAGE_KEY).then((idbSaved) => {
+      if (idbSaved && isMounted) {
+        try {
+          const parsedIdb = JSON.parse(idbSaved);
+          if (parsedIdb?.hero && Array.isArray(parsedIdb?.products)) {
+            if (parsedIdb.customBlocks) {
+              parsedIdb.customBlocks = parsedIdb.customBlocks.filter((b: any) => b && b.type !== 'faq');
+            }
+            setConfig((prev) => ({ ...prev, ...parsedIdb }));
+          }
+        } catch {
+          // ignore
+        }
+      }
+    });
+
+    // 2. Real-time listener on Firestore settings/landingConfig
+    const docRef = doc(db, 'settings', 'landingConfig');
+    const unsubscribe = onSnapshot(
+      docRef,
+      (snap) => {
         if (!isMounted) return;
         if (snap.exists()) {
           const data = snap.data();
           if (data?.configJson) {
-            const cloudConfig = JSON.parse(data.configJson);
-            if (cloudConfig?.hero && Array.isArray(cloudConfig?.products)) {
-              const localSaved = localStorage.getItem(STORAGE_KEY);
-              const localTime = Number(localStorage.getItem(STORAGE_KEY + '_time') || 0);
-              const cloudTime = Number(data?.timestamp || 0);
-
-              // If no local config exists OR cloud version is newer, hydrate from cloud
-              if (!localSaved || (cloudTime > 0 && cloudTime > localTime)) {
-                const merged = {
+            try {
+              const cloudConfig = JSON.parse(data.configJson);
+              if (cloudConfig?.hero && Array.isArray(cloudConfig?.products)) {
+                const merged: LandingPageConfig = {
                   ...DEFAULT_LANDING_CONFIG,
                   ...cloudConfig,
                   hero: { ...DEFAULT_LANDING_CONFIG.hero, ...(cloudConfig.hero || {}) },
@@ -262,30 +260,40 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
                   verticalVideos: cloudConfig.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos,
                   customBlocks: (cloudConfig.customBlocks || []).filter((b: any) => b && b.type !== 'faq'),
                 };
-                setConfig(merged);
+
+                // Hydrate unless admin is currently typing / editing unsaved changes in studio
+                setConfig((current) => {
+                  if (hasUnsavedChanges) return current;
+                  return merged;
+                });
                 setLastSavedConfigJson(JSON.stringify(merged));
                 persistLocally(merged);
               }
+            } catch (err) {
+              console.warn('Failed to parse incoming cloud config:', err);
             }
           }
         }
-      } catch (err) {
-        console.warn('Firestore initial config load notice:', err);
+      },
+      (err) => {
+        console.warn('Firestore real-time config listener notice:', err);
       }
-    };
-    fetchCloudConfig();
+    );
+
     return () => {
       isMounted = false;
+      unsubscribe();
     };
-  }, []);
+  }, [hasUnsavedChanges]);
 
   // History stacks for Undo / Redo
   const [historyPast, setHistoryPast] = useState<LandingPageConfig[]>([]);
   const [historyFuture, setHistoryFuture] = useState<LandingPageConfig[]>([]);
 
-  // Ref to prevent overlapping Firestore writes
+  // Ref to prevent overlapping Firestore writes and backoff on quota limits
   const isCloudSyncingRef = useRef(false);
   const cloudDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const cloudQuotaExhaustedUntilRef = useRef<number>(0);
 
   // Immediate synchronous LocalStorage & IndexedDB persistence helper
   const persistLocally = (nextConfig: LandingPageConfig) => {
@@ -300,7 +308,6 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
         localStorage.setItem(STORAGE_KEY + '_time', Date.now().toString());
       } catch (quotaErr) {
         // If quota exceeded, sanitize images in background and re-store
-        console.warn('LocalStorage quota notice, compressing assets...', quotaErr);
         sanitizeConfigImages(nextConfig).then((cleanCfg) => {
           const cleanStr = JSON.stringify(cleanCfg);
           try {
@@ -319,13 +326,15 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Safe Cloud Sync function with 1MB Firestore limit protection
   const syncToCloud = useCallback(async (cfgToSync: LandingPageConfig) => {
     if (isCloudSyncingRef.current) return;
+    if (Date.now() < cloudQuotaExhaustedUntilRef.current) return; // Respect quota backoff
+
     try {
       isCloudSyncingRef.current = true;
       let targetConfig = cfgToSync;
       let jsonStr = JSON.stringify(targetConfig);
 
       // If document payload approaches Firestore 1MB limit, compress images
-      if (jsonStr.length > 700000) {
+      if (jsonStr.length > 600000) {
         targetConfig = await sanitizeConfigImages(cfgToSync);
         jsonStr = JSON.stringify(targetConfig);
       }
@@ -340,8 +349,14 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
         },
         { merge: true }
       );
-    } catch (err) {
-      console.warn('Firestore cloud sync notice:', err);
+    } catch (err: any) {
+      if (err?.code === 'resource-exhausted' || err?.message?.includes('Quota limit exceeded')) {
+        // Back off cloud writes for 2 minutes, local IndexedDB retains everything safely
+        cloudQuotaExhaustedUntilRef.current = Date.now() + 120000;
+        console.warn('Firebase daily write quota reached - local persistence is active & safe.');
+      } else {
+        console.warn('Firestore cloud sync notice:', err);
+      }
     } finally {
       isCloudSyncingRef.current = false;
     }
