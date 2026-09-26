@@ -23,6 +23,128 @@ const PENDING_SHEETS_ORDERS_KEY = 'tingo_pending_sheets_orders';
 const PENDING_FIRESTORE_CUSTOMERS_KEY = 'tingo_pending_firestore_customers';
 const PENDING_FIRESTORE_ORDERS_KEY = 'tingo_pending_firestore_orders';
 
+// Persistent Synced Record IDs Cache (Anti-duplicate shield)
+export const SYNCED_ORDERS_STORAGE_KEY = 'tingo_synced_orders_ids';
+export const SYNCED_CUSTOMERS_STORAGE_KEY = 'tingo_synced_customers_ids';
+
+/**
+ * Retrieves the set of Order IDs that have already been synced to Google Sheets.
+ */
+export const getSyncedOrderIds = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(SYNCED_ORDERS_STORAGE_KEY);
+    if (raw) {
+      const arr: string[] = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        return new Set(arr.map((id) => String(id).trim()));
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return new Set();
+};
+
+export const markOrderAsSynced = (orderId: string) => {
+  if (!orderId) return;
+  try {
+    const set = getSyncedOrderIds();
+    set.add(String(orderId).trim());
+    localStorage.setItem(SYNCED_ORDERS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore
+  }
+};
+
+export const markOrdersAsSynced = (orderIds: string[]) => {
+  if (!orderIds || orderIds.length === 0) return;
+  try {
+    const set = getSyncedOrderIds();
+    orderIds.forEach((id) => {
+      if (id) set.add(String(id).trim());
+    });
+    localStorage.setItem(SYNCED_ORDERS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore
+  }
+};
+
+export const isOrderSynced = (orderId: string): boolean => {
+  if (!orderId) return false;
+  return getSyncedOrderIds().has(String(orderId).trim());
+};
+
+export const getCustomerSyncKey = (customer: CustomerUser | string | { phone?: string; id?: string }): string => {
+  if (typeof customer === 'string') {
+    return customer.replace(/[\s.-]/g, '').trim();
+  }
+  const cleanPhone = (customer.phone || '').replace(/[\s.-]/g, '').trim();
+  if (cleanPhone) return cleanPhone;
+  return (customer.id || '').trim();
+};
+
+export const getSyncedCustomerKeys = (): Set<string> => {
+  try {
+    const raw = localStorage.getItem(SYNCED_CUSTOMERS_STORAGE_KEY);
+    if (raw) {
+      const arr: string[] = JSON.parse(raw);
+      if (Array.isArray(arr)) {
+        return new Set(arr.map((k) => String(k).trim()));
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return new Set();
+};
+
+export const markCustomerAsSynced = (customer: CustomerUser | string) => {
+  const key = getCustomerSyncKey(customer);
+  if (!key) return;
+  try {
+    const set = getSyncedCustomerKeys();
+    set.add(key);
+    localStorage.setItem(SYNCED_CUSTOMERS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore
+  }
+};
+
+export const markCustomersAsSynced = (customers: (CustomerUser | string)[]) => {
+  if (!customers || customers.length === 0) return;
+  try {
+    const set = getSyncedCustomerKeys();
+    customers.forEach((c) => {
+      const k = getCustomerSyncKey(c);
+      if (k) set.add(k);
+    });
+    localStorage.setItem(SYNCED_CUSTOMERS_STORAGE_KEY, JSON.stringify(Array.from(set)));
+  } catch {
+    // ignore
+  }
+};
+
+export const isCustomerSynced = (customer: CustomerUser | string): boolean => {
+  const key = getCustomerSyncKey(customer);
+  if (!key) return false;
+  const set = getSyncedCustomerKeys();
+  if (set.has(key)) return true;
+  if (typeof customer !== 'string') {
+    if (customer.id && set.has(customer.id.trim())) return true;
+    if (customer.phone && set.has(customer.phone.replace(/[\s.-]/g, '').trim())) return true;
+  }
+  return false;
+};
+
+export const clearSyncedCache = () => {
+  try {
+    localStorage.removeItem(SYNCED_ORDERS_STORAGE_KEY);
+    localStorage.removeItem(SYNCED_CUSTOMERS_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+};
+
 // Primary Hardcoded Webhook URL (Master Backup)
 export const HARDCODED_GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwPPuWqPz0wMiipd3BFrZ2v28p8FsGx18TtwEc3_6ItwIp4VQIilO9h9XiChP0XG--V2Q/exec';
 
@@ -824,8 +946,16 @@ export const fetchOrdersFromGoogleSheet = async (token?: string): Promise<Partia
 
 export const appendOrderToGoogleSheet = async (
   order: Order,
-  token?: string
+  token?: string,
+  options?: { force?: boolean }
 ): Promise<boolean> => {
+  if (!order || !order.id) return false;
+
+  // Anti-duplicate protection: If order is already synced and force flag is not set, skip duplicate send
+  if (!options?.force && isOrderSynced(order.id)) {
+    return true;
+  }
+
   let sentViaAny = false;
 
   // 1. Send via Webhook (Works for 100% of visitors & customers without login)
@@ -891,12 +1021,13 @@ export const appendOrderToGoogleSheet = async (
     }
   }
 
-  if (!sentViaAny) {
+  if (sentViaAny) {
+    markOrderAsSynced(order.id);
+    return true;
+  } else {
     queuePendingOrder(order);
     return false;
   }
-
-  return true;
 };
 
 export const flushPendingSyncQueues = async () => {
@@ -908,17 +1039,21 @@ export const flushPendingSyncQueues = async () => {
     const rawCust = localStorage.getItem(PENDING_SHEETS_CUSTOMERS_KEY);
     if (rawCust) {
       const list: CustomerUser[] = JSON.parse(rawCust);
-      if (list.length > 0) {
+      const unsyncedList = list.filter((c) => !isCustomerSynced(c));
+      if (unsyncedList.length > 0) {
         const ok = await sendToGoogleSheetWebhook({
           type: 'bulk_customers',
-          data: list.map((c) => ({
+          data: unsyncedList.map((c) => ({
             ...c,
             status: c.isBlocked ? 'Bị khóa' : 'Hoạt động',
           })),
         });
         if (ok) {
+          markCustomersAsSynced(unsyncedList);
           localStorage.removeItem(PENDING_SHEETS_CUSTOMERS_KEY);
         }
+      } else {
+        localStorage.removeItem(PENDING_SHEETS_CUSTOMERS_KEY);
       }
     }
 
@@ -926,14 +1061,18 @@ export const flushPendingSyncQueues = async () => {
     const rawOrd = localStorage.getItem(PENDING_SHEETS_ORDERS_KEY);
     if (rawOrd) {
       const list: Order[] = JSON.parse(rawOrd);
-      if (list.length > 0) {
+      const unsyncedOrders = list.filter((o) => o.id && !isOrderSynced(o.id));
+      if (unsyncedOrders.length > 0) {
         const ok = await sendToGoogleSheetWebhook({
           type: 'bulk_orders',
-          data: list,
+          data: unsyncedOrders,
         });
         if (ok) {
+          markOrdersAsSynced(unsyncedOrders.map((o) => o.id));
           localStorage.removeItem(PENDING_SHEETS_ORDERS_KEY);
         }
+      } else {
+        localStorage.removeItem(PENDING_SHEETS_ORDERS_KEY);
       }
     }
 
@@ -977,8 +1116,16 @@ if (typeof window !== 'undefined') {
 
 export const appendCustomerToGoogleSheet = async (
   customer: CustomerUser,
-  token?: string
+  token?: string,
+  options?: { force?: boolean }
 ): Promise<boolean> => {
+  if (!customer) return false;
+
+  // Anti-duplicate protection: If customer is already synced and force flag is not set, skip duplicate send
+  if (!options?.force && isCustomerSynced(customer)) {
+    return true;
+  }
+
   let sentViaAny = false;
 
   // 1. Send via Webhook (Works for 100% of visitor registrations 24/7)
@@ -1028,21 +1175,23 @@ export const appendCustomerToGoogleSheet = async (
     }
   }
 
-  if (!sentViaAny) {
+  if (sentViaAny) {
+    markCustomerAsSynced(customer);
+    return true;
+  } else {
     queuePendingCustomer(customer);
     return false;
   }
-
-  return true;
 };
 
 /* =========================================================================
- * BULK SYNC FUNCTIONS
+ * BULK SYNC FUNCTIONS (WITH STRICT DEDUPLICATION FILTERING)
  * ========================================================================= */
 
 export const bulkSyncCustomersToGoogleSheet = async (
   customers: CustomerUser[],
-  token?: string
+  token?: string,
+  options?: { forceAll?: boolean }
 ): Promise<{ success: boolean; count: number; error?: string }> => {
   const activeToken = token || getGoogleAccessToken();
   const webhookUrl = getSavedWebhookUrl();
@@ -1051,14 +1200,24 @@ export const bulkSyncCustomersToGoogleSheet = async (
     return { success: false, count: 0, error: 'Chưa cấu hình Google Webhook hoặc chưa đăng nhập Google' };
   }
 
+  // Filter to ONLY un-synced customers to eliminate duplicates completely!
+  const targetCustomers = options?.forceAll ? customers : customers.filter((c) => !isCustomerSynced(c));
+
+  if (targetCustomers.length === 0) {
+    return { success: true, count: 0 };
+  }
+
+  let sent = false;
+
   if (webhookUrl) {
-    await sendToGoogleSheetWebhook({
+    const ok = await sendToGoogleSheetWebhook({
       type: 'bulk_customers',
-      data: customers.map((c) => ({
+      data: targetCustomers.map((c) => ({
         ...c,
         status: c.isBlocked ? 'Bị khóa' : 'Hoạt động',
       })),
     });
+    if (ok) sent = true;
   }
 
   if (activeToken) {
@@ -1068,7 +1227,7 @@ export const bulkSyncCustomersToGoogleSheet = async (
       sheetId = created.id;
     }
 
-    const rows = customers.map((customer, idx) => [
+    const rows = targetCustomers.map((customer, idx) => [
       idx + 1,
       customer.id,
       customer.name,
@@ -1095,17 +1254,22 @@ export const bulkSyncCustomersToGoogleSheet = async (
         null,
         2500
       );
+      sent = true;
     } catch {
       // ignore
     }
   }
 
-  return { success: true, count: customers.length };
+  // Mark all successfully synced items in the local cache
+  markCustomersAsSynced(targetCustomers);
+
+  return { success: true, count: targetCustomers.length };
 };
 
 export const bulkSyncOrdersToGoogleSheet = async (
   orders: Order[],
-  token?: string
+  token?: string,
+  options?: { forceAll?: boolean }
 ): Promise<{ success: boolean; count: number; error?: string }> => {
   const activeToken = token || getGoogleAccessToken();
   const webhookUrl = getSavedWebhookUrl();
@@ -1114,8 +1278,18 @@ export const bulkSyncOrdersToGoogleSheet = async (
     return { success: false, count: 0, error: 'Chưa cấu hình Google Webhook hoặc chưa đăng nhập Google' };
   }
 
+  // Filter to ONLY un-synced orders to eliminate duplicates completely!
+  const targetOrders = options?.forceAll ? orders : orders.filter((o) => o.id && !isOrderSynced(o.id));
+
+  if (targetOrders.length === 0) {
+    return { success: true, count: 0 };
+  }
+
+  let sent = false;
+
   if (webhookUrl) {
-    await sendToGoogleSheetWebhook({ type: 'bulk_orders', data: orders });
+    const ok = await sendToGoogleSheetWebhook({ type: 'bulk_orders', data: targetOrders });
+    if (ok) sent = true;
   }
 
   if (activeToken) {
@@ -1125,7 +1299,7 @@ export const bulkSyncOrdersToGoogleSheet = async (
       sheetId = created.id;
     }
 
-    const rows = orders.map((order) => {
+    const rows = targetOrders.map((order) => {
       const itemsFormatted = (order.items || [])
         .map((item) => `${item.product?.name || 'Sản phẩm'} (x${item.quantity})`)
         .join('; ');
@@ -1161,12 +1335,16 @@ export const bulkSyncOrdersToGoogleSheet = async (
         null,
         2500
       );
+      sent = true;
     } catch {
       // ignore
     }
   }
 
-  return { success: true, count: orders.length };
+  // Mark all successfully synced order IDs in local cache
+  markOrdersAsSynced(targetOrders.map((o) => o.id));
+
+  return { success: true, count: targetOrders.length };
 };
 
 /* =========================================================================
@@ -1175,10 +1353,11 @@ export const bulkSyncOrdersToGoogleSheet = async (
 
 /**
  * Sweeps all customer records across Local Cache and Firestore,
- * guarantees all exist in Firestore, and syncs them directly into Google Sheets with STT and Status.
+ * guarantees all exist in Firestore, and syncs ONLY unsynced ones directly into Google Sheets.
  */
-export const syncAllExistingCustomers = async (): Promise<{
+export const syncAllExistingCustomers = async (options?: { forceAll?: boolean }): Promise<{
   totalChecked: number;
+  unsyncedCount: number;
   firebaseSynced: number;
   googleSheetsSynced: number;
 }> => {
@@ -1189,11 +1368,13 @@ export const syncAllExistingCustomers = async (): Promise<{
     const raw = localStorage.getItem(ACCOUNTS_CACHE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      Object.values(parsed).forEach((item: any) => {
-        if (item && item.phone) {
-          const clean = item.phone.replace(/[\s.-]/g, '');
-          customerMap[clean] = {
-            id: item.id || `CUS-${clean}`,
+      const list: CustomerUser[] = Array.isArray(parsed) ? parsed : Object.values(parsed);
+      list.forEach((item: any) => {
+        if (item && (item.phone || item.id)) {
+          const clean = (item.phone || '').replace(/[\s.-]/g, '');
+          const key = clean || item.id;
+          customerMap[key] = {
+            id: item.id || `CUS-${clean || key}`,
             name: item.name || 'Khách hàng',
             phone: clean,
             email: item.email || '',
@@ -1219,9 +1400,10 @@ export const syncAllExistingCustomers = async (): Promise<{
       snap.docs.forEach((docSnap) => {
         const data = docSnap.data() as any;
         const clean = (data.phone || docSnap.id).replace(/[\s.-]/g, '');
-        if (clean && !customerMap[clean]) {
-          customerMap[clean] = {
-            id: data.id || `CUS-${clean}`,
+        const key = clean || data.id || docSnap.id;
+        if (key && !customerMap[key]) {
+          customerMap[key] = {
+            id: data.id || `CUS-${clean || key}`,
             name: data.name || 'Khách hàng',
             phone: clean,
             email: data.email || '',
@@ -1245,32 +1427,39 @@ export const syncAllExistingCustomers = async (): Promise<{
 
   // 3. Guarantee all exist in Firestore (Non-blocking background writes with timeout guard)
   for (const cus of allCustomers) {
-    try {
-      safeWithTimeout(
-        setDoc(doc(db, 'customers', cus.phone), sanitizeFirestoreData({
-          ...cus,
-          registeredAt: cus.createdAt,
-          lastLoginAt: cus.createdAt,
-        }), { merge: true }),
-        null,
-        1000
-      ).then(() => {
-        firebaseSynced++;
-      }).catch(() => {});
-    } catch {
-      // ignore
+    if (cus.phone) {
+      try {
+        safeWithTimeout(
+          setDoc(doc(db, 'customers', cus.phone), sanitizeFirestoreData({
+            ...cus,
+            registeredAt: cus.createdAt,
+            lastLoginAt: cus.createdAt,
+          }), { merge: true }),
+          null,
+          1000
+        ).then(() => {
+          firebaseSynced++;
+        }).catch(() => {});
+      } catch {
+        // ignore
+      }
     }
   }
 
-  // 4. Push all to Google Sheets via Webhook & OAuth
-  if (allCustomers.length > 0) {
-    await bulkSyncCustomersToGoogleSheet(allCustomers);
+  // 4. Filter to unsynced and Push to Google Sheets via bulkSyncCustomersToGoogleSheet
+  const unsyncedCustomers = options?.forceAll ? allCustomers : allCustomers.filter((c) => !isCustomerSynced(c));
+  let googleSheetsSynced = 0;
+
+  if (unsyncedCustomers.length > 0) {
+    const res = await bulkSyncCustomersToGoogleSheet(unsyncedCustomers, undefined, options);
+    googleSheetsSynced = res.count;
   }
 
   return {
     totalChecked: allCustomers.length,
+    unsyncedCount: unsyncedCustomers.length,
     firebaseSynced: allCustomers.length,
-    googleSheetsSynced: allCustomers.length,
+    googleSheetsSynced,
   };
 };
 
@@ -1281,7 +1470,8 @@ export const syncAllExistingCustomers = async (): Promise<{
 export const reconcileAndSyncAll = async (
   localOrders: Order[] = [],
   localCustomers: CustomerUser[] = [],
-  token?: string
+  token?: string,
+  options?: { forceAll?: boolean }
 ): Promise<{
   success: boolean;
   customersSyncedToSheet: number;
@@ -1310,13 +1500,55 @@ export const reconcileAndSyncAll = async (
   let ordersRestoredToFirestore = 0;
 
   try {
-    // 1. Sync all existing customers first
-    const custRes = await syncAllExistingCustomers();
-    customersSyncedToSheet = custRes.googleSheetsSynced;
+    // 1. Reconcile & sync customers (checks both passed localCustomers and local accounts cache, pushing ONLY unsynced ones)
+    const customerMap: Record<string, CustomerUser> = {};
+    if (localCustomers && localCustomers.length > 0) {
+      localCustomers.forEach((c) => {
+        const key = getCustomerSyncKey(c);
+        if (key) customerMap[key] = c;
+      });
+    }
+    try {
+      const raw = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        const list: CustomerUser[] = Array.isArray(parsed) ? parsed : Object.values(parsed);
+        list.forEach((c) => {
+          const key = getCustomerSyncKey(c);
+          if (key && !customerMap[key]) customerMap[key] = c;
+        });
+      }
+    } catch {
+      // ignore
+    }
 
-    // 2. Push any new orders to Google Sheets
-    if (localOrders.length > 0) {
-      const ordRes = await bulkSyncOrdersToGoogleSheet(localOrders, activeToken || undefined);
+    const combinedCustomers = Object.values(customerMap);
+    if (combinedCustomers.length > 0) {
+      const custRes = await bulkSyncCustomersToGoogleSheet(combinedCustomers, activeToken || undefined, options);
+      if (custRes.success) {
+        customersSyncedToSheet = custRes.count;
+      }
+    } else {
+      const custRes = await syncAllExistingCustomers(options);
+      customersSyncedToSheet = custRes.googleSheetsSynced;
+    }
+
+    // 2. Gather local orders (if localOrders passed, or from localStorage) and push ONLY unsynced orders to Google Sheets
+    let effectiveOrders: Order[] = localOrders;
+    if (!effectiveOrders || effectiveOrders.length === 0) {
+      try {
+        const rawOrders = localStorage.getItem('tingo_orders_storage');
+        if (rawOrders) {
+          const parsed = JSON.parse(rawOrders);
+          if (Array.isArray(parsed)) effectiveOrders = parsed;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    if (effectiveOrders.length > 0) {
+      const ordRes = await bulkSyncOrdersToGoogleSheet(effectiveOrders, activeToken || undefined, options);
       if (ordRes.success) {
         ordersSyncedToSheet = ordRes.count;
         localStorage.removeItem(PENDING_SHEETS_ORDERS_KEY);

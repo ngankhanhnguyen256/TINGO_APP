@@ -32,7 +32,7 @@ import { CustomerAuthModal } from './components/CustomerAuthModal';
 import { CustomerProfileModal } from './components/CustomerProfileModal';
 import { VisualEditorProvider, useVisualEditor } from './context/VisualEditorContext';
 import { PRODUCTS } from './data/mockData';
-import { CartItem, Product, Order } from './types';
+import { CartItem, Product, Order, CustomerUser } from './types';
 import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
 import { db } from './lib/firebase';
 import {
@@ -45,6 +45,7 @@ import {
   getGoogleAccessToken,
   reconcileAndSyncAll,
   isAutoSyncEnabled,
+  flushPendingSyncQueues,
 } from './lib/googleSheetsService';
 
 function MainApp() {
@@ -220,16 +221,50 @@ function MainApp() {
     return () => window.removeEventListener('tingo-order-deleted', handleOrderDeleted);
   }, []);
 
-  // Automatic Background Two-Way Sync Engine (reconciles Google Sheets and Firebase / Local queues)
+  // Automatic Background Two-Way Sync Engine (reconciles Google Sheets and Firebase / Local queues for BOTH orders & customers)
   useEffect(() => {
     const runAutoSync = async () => {
-      const token = getGoogleAccessToken();
-      if (token && isAutoSyncEnabled()) {
+      // Background sync runs 24/7 via Webhook and OAuth if auto-sync is enabled
+      if (!isAutoSyncEnabled()) return;
+
+      try {
+        const token = getGoogleAccessToken();
+
+        // 1. Retrieve all local customers from cache
+        let localCustList: CustomerUser[] = [];
         try {
-          await reconcileAndSyncAll(orders);
-        } catch (e) {
-          // background quiet catch
+          const rawCust = localStorage.getItem('tingo_registered_customers_cache');
+          if (rawCust) {
+            const parsed = JSON.parse(rawCust);
+            localCustList = Array.isArray(parsed) ? parsed : Object.values(parsed);
+          }
+        } catch {
+          // ignore
         }
+
+        // 2. Retrieve local orders
+        let localOrdersList: Order[] = orders;
+        if (!localOrdersList || localOrdersList.length === 0) {
+          try {
+            const rawOrders = localStorage.getItem('tingo_orders_storage');
+            if (rawOrders) {
+              const parsedOrd = JSON.parse(rawOrders);
+              if (Array.isArray(parsedOrd)) {
+                localOrdersList = parsedOrd;
+              }
+            }
+          } catch {
+            // ignore
+          }
+        }
+
+        // 3. Flush offline queues
+        await flushPendingSyncQueues();
+
+        // 4. Automatically sync ONLY unsynced orders & unsynced customers to Google Sheets
+        await reconcileAndSyncAll(localOrdersList, localCustList, token || undefined);
+      } catch (e) {
+        // background quiet catch
       }
     };
 
