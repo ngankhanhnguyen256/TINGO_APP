@@ -53,7 +53,7 @@ export const HealthBlogSection: React.FC = () => {
 
         {/* Articles Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-7">
-          {articles.map((art) => (
+          {(articles || []).map((art) => (
             <EditableElement
               key={art.id}
               label={`Bài viết: ${art.title.slice(0, 15)}...`}

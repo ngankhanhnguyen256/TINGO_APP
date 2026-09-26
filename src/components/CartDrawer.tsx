@@ -233,7 +233,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 </button>
               </div>
             ) : (
-              cartItems.map((item) => {
+              (cartItems || []).map((item) => {
                 const itemOriginalPrice =
                   item.product.originalPrice || Math.round(item.product.price * 1.18);
                 const hasDiscount = itemOriginalPrice > item.product.price;
@@ -347,7 +347,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                 {/* Voucher Quick Selector Tray */}
                 {showVoucherList && (
                   <div className="space-y-1.5 p-2.5 bg-emerald-50/70 border border-emerald-200/80 rounded-2xl animate-fade-in text-xs max-h-48 overflow-y-auto">
-                    {availableVouchers.map((v) => {
+                    {(availableVouchers || []).map((v) => {
                       const isSelected = appliedCoupon === v.code;
                       return (
                         <div

@@ -108,42 +108,116 @@ function MainApp() {
     return () => window.removeEventListener('tingo-cart-cleared', handleCartCleared);
   }, []);
 
-  // Real-time Firestore orders listener with resilient sorting
+  // Real-time Firestore orders listener with resilient MERGE logic (Never overwrite/wipe local cache)
   useEffect(() => {
     try {
       const unsubscribe = onSnapshot(
         collection(db, 'orders'),
         (snapshot) => {
-          const firestoreOrders: Order[] = [];
+          // 1. Gather all incoming orders from Firebase
+          const incomingMap = new Map<string, Order>();
           snapshot.forEach((docSnap) => {
-            firestoreOrders.push({
-              ...(docSnap.data() as Order),
-              id: docSnap.id,
-            });
+            const data = docSnap.data() as Order;
+            if (docSnap.id) {
+              incomingMap.set(docSnap.id, {
+                ...data,
+                id: docSnap.id,
+              });
+            }
           });
 
-          // Sort descending by date
-          const sorted = firestoreOrders.sort((a, b) => {
+          // 2. Load existing orders from LocalStorage to prevent data loss
+          let localList: Order[] = [];
+          try {
+            const raw = localStorage.getItem('tingo_orders_storage');
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed)) {
+                localList = parsed.filter((o) => o && o.id);
+              }
+            }
+          } catch {
+            // ignore
+          }
+
+          // 3. Build merged map: start with local cache
+          const mergedMap = new Map<string, Order>();
+          localList.forEach((ord) => {
+            mergedMap.set(ord.id, ord);
+          });
+
+          // 4. Merge incoming Firebase orders (updates status, adds new orders)
+          incomingMap.forEach((ord, id) => {
+            const existing = mergedMap.get(id);
+            if (existing) {
+              // Merge fields: preserve local extra info while accepting cloud status updates
+              mergedMap.set(id, {
+                ...existing,
+                ...ord,
+              });
+            } else {
+              mergedMap.set(id, ord);
+            }
+          });
+
+          // 5. Convert to array and sort descending by date
+          const mergedList = Array.from(mergedMap.values()).sort((a, b) => {
             const timeA = new Date(a.createdAt).getTime() || (a as any).createdAtTimestamp || 0;
             const timeB = new Date(b.createdAt).getTime() || (b as any).createdAtTimestamp || 0;
             return timeB - timeA;
           });
 
-          setOrders(sorted);
-          try {
-            localStorage.setItem('tingo_orders_storage', JSON.stringify(sorted));
-          } catch {
-            // ignore
+          // 6. Safety check: NEVER replace non-empty local cache with empty array
+          if (mergedList.length > 0) {
+            setOrders(mergedList);
+            try {
+              localStorage.setItem('tingo_orders_storage', JSON.stringify(mergedList));
+            } catch {
+              // ignore
+            }
+          } else if (localList.length > 0) {
+            setOrders(localList);
           }
         },
         (err) => {
-          console.warn('Firestore orders subscription note:', err);
+          console.warn('Firestore orders subscription note (Keeping local cache intact):', err);
+          // On error (quota exceeded, offline, unauthorized), strictly keep local cache
+          try {
+            const raw = localStorage.getItem('tingo_orders_storage');
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                setOrders(parsed);
+              }
+            }
+          } catch {
+            // ignore
+          }
         }
       );
       return () => unsubscribe();
     } catch (e) {
-      console.warn('Firestore subscription catch:', e);
+      console.warn('Firestore subscription catch (Keeping local cache):', e);
     }
+  }, []);
+
+  // Listen for explicit Admin Order Deletion events to only remove when Admin explicitly commands
+  useEffect(() => {
+    const handleOrderDeleted = (e: any) => {
+      const deletedId = e.detail?.orderId;
+      if (!deletedId) return;
+      setOrders((prev) => {
+        const updated = prev.filter((o) => o.id !== deletedId);
+        try {
+          localStorage.setItem('tingo_orders_storage', JSON.stringify(updated));
+        } catch {
+          // ignore
+        }
+        return updated;
+      });
+    };
+    window.addEventListener('tingo-order-deleted', handleOrderDeleted);
+    return () => window.removeEventListener('tingo-order-deleted', handleOrderDeleted);
   }, []);
 
   // Automatic Background Two-Way Sync Engine (reconciles Google Sheets and Firebase / Local queues)

@@ -175,7 +175,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
               onEdit={() =>
                 openTextEditor(
                   'Sửa số liệu (VD: 100% Thuần thực vật, 24+ Vi chất, 4.9★ 12.000+ Đánh giá)',
-                  hero.stats.map((s) => `${s.value}: ${s.label}`).join(' | '),
+                  (hero.stats || []).map((s) => `${s.value}: ${s.label}`).join(' | '),
                   (val) => {
                     const parsed = val.split('|').map((part) => {
                       const [v, ...lbl] = part.split(':');
@@ -187,7 +187,7 @@ export const HeroSection: React.FC<HeroSectionProps> = ({
               }
             >
               <div className="pt-4 border-t border-emerald-200/60 grid grid-cols-3 gap-2 text-left cursor-pointer">
-                {hero.stats.map((st, idx) => (
+                {(hero.stats || []).map((st, idx) => (
                   <div key={idx}>
                     <div className="text-xl sm:text-2xl font-black text-[#008764] font-display">{st.value}</div>
                     <div className="text-xs text-slate-500 font-medium">{st.label}</div>

@@ -30,7 +30,7 @@ export const CertificationsSection: React.FC = () => {
     <section className="py-10 bg-[#f3f9f5] border-y border-emerald-100/80">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-          {certs.map((c, i) => (
+          {(certs || []).map((c, i) => (
             <EditableElement
               key={c.id || i}
               label={`Chứng nhận: ${c.title}`}

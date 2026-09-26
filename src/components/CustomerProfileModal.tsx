@@ -328,23 +328,23 @@ export const CustomerProfileModal: React.FC<CustomerProfileModalProps> = ({ onOp
                         </div>
                         <div className="text-right">
                           <span className="text-sm font-black text-rose-600">
-                            {ord.total.toLocaleString('vi-VN')}₫
+                            {(ord.total || 0).toLocaleString('vi-VN')}₫
                           </span>
                           <span className="text-[10px] block text-slate-400">
-                            {ord.items.length} món • {ord.paymentMethod.toUpperCase()}
+                            {(ord.items || []).length} món • {(ord.paymentMethod || 'COD').toUpperCase()}
                           </span>
                         </div>
                       </div>
 
                       {/* Items list */}
                       <div className="space-y-1.5 text-xs text-slate-700">
-                        {ord.items.map((it, idx) => (
+                        {(ord.items || []).map((it, idx) => (
                           <div key={idx} className="flex items-center justify-between text-[12px]">
                             <span className="truncate max-w-[280px]">
-                              {it.quantity}x {it.product.name}
+                              {it.quantity || 1}x {it.product?.name || (it as any)?.name || 'Sản phẩm'}
                             </span>
                             <span className="font-semibold text-slate-900">
-                              {(it.product.price * it.quantity).toLocaleString('vi-VN')}₫
+                              {((it.product?.price || 0) * (it.quantity || 1)).toLocaleString('vi-VN')}₫
                             </span>
                           </div>
                         ))}
@@ -388,7 +388,7 @@ export const CustomerProfileModal: React.FC<CustomerProfileModalProps> = ({ onOp
               </div>
 
               <div className="space-y-2.5">
-                {vouchers.map((v) => (
+                {(vouchers || []).map((v) => (
                   <div
                     key={v.code}
                     className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-50/90 to-teal-50/70 border border-emerald-200/80 flex items-center justify-between gap-3 shadow-2xs"

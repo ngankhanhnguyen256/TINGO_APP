@@ -205,24 +205,40 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
             return timeB - timeA;
           });
 
-          setOrders(sorted);
-          try {
-            localStorage.setItem('tingo_orders_storage', JSON.stringify(sorted));
-          } catch {
-            // ignore
+          if (sorted.length > 0) {
+            setOrders(sorted);
+            try {
+              localStorage.setItem('tingo_orders_storage', JSON.stringify(sorted));
+            } catch {
+              // ignore
+            }
+          } else if (localOrders && localOrders.length > 0) {
+            setOrders(localOrders);
           }
         },
         (error) => {
-          console.warn('Firestore orders real-time subscription note:', error);
+          console.warn('Firestore orders real-time subscription note (Safe fallback):', error);
           if (localOrders && localOrders.length > 0) {
             setOrders(localOrders);
+          } else {
+            try {
+              const cachedRaw = localStorage.getItem('tingo_orders_storage');
+              if (cachedRaw) {
+                const list = JSON.parse(cachedRaw);
+                if (Array.isArray(list) && list.length > 0) {
+                  setOrders(list);
+                }
+              }
+            } catch {
+              // ignore
+            }
           }
         }
       );
 
       return () => unsubscribe();
     } catch (err) {
-      console.warn('Firebase order listener fallback', err);
+      console.warn('Firebase order listener fallback (Keeping local cache):', err);
       if (localOrders && localOrders.length > 0) {
         setOrders(localOrders);
       }
@@ -264,10 +280,13 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
         // ignore
       }
 
-      // 2. Override with Firestore data (Source of truth)
+      // 2. Override/enrich with Firestore data
       firebaseList.forEach((fc) => {
         const clean = fc.phone.replace(/[\s.-]/g, '');
-        map[clean] = fc;
+        map[clean] = {
+          ...(map[clean] || {}),
+          ...fc,
+        };
       });
 
       // 3. Auto-sync any local account missing from Firestore
@@ -284,6 +303,13 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
       });
 
       setCustomers(sorted);
+
+      // Keep local accounts cache updated with complete merged records
+      try {
+        localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(map));
+      } catch {
+        // ignore
+      }
     };
 
     try {
@@ -443,6 +469,56 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
       setOrders((prev) =>
         prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
       );
+    } finally {
+      setIsUpdatingOrder(false);
+    }
+  };
+
+  /**
+   * Delete Order (Exclusively invoked by explicit Admin action)
+   */
+  const handleDeleteOrder = async (orderId: string) => {
+    if (!confirm(`Bạn có chắc chắn muốn XÓA VĨNH VIỄN đơn hàng #${orderId}?\nThao tác này sẽ xóa đơn khỏi hệ thống và bộ nhớ LocalStorage.`)) {
+      return;
+    }
+    setIsUpdatingOrder(true);
+    try {
+      // 1. Delete from Firestore
+      await deleteDoc(doc(db, 'orders', orderId)).catch(() => {});
+
+      // 2. Delete from LocalStorage
+      try {
+        const raw = localStorage.getItem('tingo_orders_storage');
+        if (raw) {
+          const list: Order[] = JSON.parse(raw);
+          const filtered = list.filter((o) => o.id !== orderId);
+          localStorage.setItem('tingo_orders_storage', JSON.stringify(filtered));
+        }
+      } catch {
+        // ignore
+      }
+
+      // 3. Notify all listeners
+      window.dispatchEvent(
+        new CustomEvent('tingo-order-deleted', {
+          detail: { orderId },
+        })
+      );
+
+      // 4. Update state
+      setOrders((prev) => prev.filter((o) => o.id !== orderId));
+      if (selectedOrder && selectedOrder.id === orderId) {
+        setSelectedOrder(null);
+      }
+
+      setActionToast({
+        type: 'success',
+        message: `Đã xóa vĩnh viễn đơn hàng #${orderId}!`,
+      });
+      setTimeout(() => setActionToast(null), 3500);
+    } catch (err) {
+      console.error('Failed to delete order:', err);
+      alert('Lỗi khi xóa đơn hàng. Vui lòng thử lại.');
     } finally {
       setIsUpdatingOrder(false);
     }
@@ -1473,21 +1549,21 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
                         <ShoppingBag className="w-4 h-4 text-emerald-600" /> Sản phẩm đã đặt
                       </div>
                       <div className="divide-y divide-slate-100">
-                        {selectedOrder.items.map((item, idx) => (
+                        {(selectedOrder.items || []).map((item, idx) => (
                           <div
                             key={idx}
                             className="py-2 flex items-center justify-between gap-2"
                           >
                             <div className="min-w-0">
                               <p className="font-medium text-slate-800 truncate">
-                                {item.product.name}
+                                {item.product?.name || (item as any)?.name || 'Sản phẩm'}
                               </p>
                               <p className="text-slate-400 text-[11px]">
-                                {item.quantity} x {item.product.price.toLocaleString('vi-VN')}đ
+                                {item.quantity || 1} x {(item.product?.price || 0).toLocaleString('vi-VN')}đ
                               </p>
                             </div>
                             <div className="font-mono font-bold text-slate-800 text-right">
-                              {(item.quantity * item.product.price).toLocaleString('vi-VN')}đ
+                              {((item.quantity || 1) * (item.product?.price || 0)).toLocaleString('vi-VN')}đ
                             </div>
                           </div>
                         ))}
@@ -1524,6 +1600,19 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
                           </span>
                         </div>
                       </div>
+                    </div>
+
+                    {/* Delete Order Action */}
+                    <div className="pt-2 flex justify-end">
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteOrder(selectedOrder.id)}
+                        disabled={isUpdatingOrder}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                      >
+                        <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                        <span>Xóa đơn hàng này</span>
+                      </button>
                     </div>
                   </div>
                 ) : (
@@ -2098,17 +2187,17 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
                               <span>Lịch sử đơn hàng của khách này</span>
                             </div>
                             <span className="text-slate-400 font-normal">
-                              {customerHistoryOrders.length} đơn
+                              {(customerHistoryOrders || []).length} đơn
                             </span>
                           </div>
 
                           <div className="divide-y divide-slate-100 max-h-44 overflow-y-auto">
-                            {customerHistoryOrders.length === 0 ? (
+                            {(customerHistoryOrders || []).length === 0 ? (
                               <div className="py-3 text-center text-slate-400 text-[11px]">
                                 Khách hàng này chưa phát sinh đơn hàng nào
                               </div>
                             ) : (
-                              customerHistoryOrders.map((ord) => (
+                              (customerHistoryOrders || []).map((ord) => (
                                 <div
                                   key={ord.id}
                                   onClick={() => {

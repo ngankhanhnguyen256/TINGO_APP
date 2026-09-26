@@ -169,9 +169,9 @@ export const FeaturedProductSection: React.FC<FeaturedProductSectionProps> = ({
                   <span className="text-xs font-bold text-emerald-300 uppercase tracking-wider block">
                     Hướng dẫn sử dụng nhanh:
                   </span>
-                  {(product.usageInstructions && product.usageInstructions.length > 0
+                  {((product.usageInstructions && product.usageInstructions.length > 0
                     ? product.usageInstructions
-                    : showcase.points
+                    : showcase.points) || []
                   ).map((pt, idx) => (
                     <div key={idx} className="flex items-start gap-2.5 text-sm text-slate-200">
                       <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
@@ -183,7 +183,7 @@ export const FeaturedProductSection: React.FC<FeaturedProductSectionProps> = ({
 
               {/* Guarantees */}
               <div className="pt-2 flex flex-wrap gap-4 text-xs text-emerald-200/90">
-                {showcase.guarantees.map((g, idx) => (
+                {(showcase.guarantees || []).map((g, idx) => (
                   <div key={idx} className="flex items-center gap-1.5">
                     <ShieldCheck className="w-4 h-4 text-emerald-400" />
                     <span>{g}</span>

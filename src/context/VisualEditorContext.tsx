@@ -235,11 +235,32 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
       if (idbSaved && isMounted) {
         try {
           const parsedIdb = JSON.parse(idbSaved);
-          if (parsedIdb?.hero && Array.isArray(parsedIdb?.products)) {
-            if (parsedIdb.customBlocks) {
-              parsedIdb.customBlocks = parsedIdb.customBlocks.filter((b: any) => b && b.type !== 'faq');
-            }
-            setConfig((prev) => ({ ...prev, ...parsedIdb }));
+          if (parsedIdb?.hero) {
+            const mergedIdb: LandingPageConfig = {
+              ...DEFAULT_LANDING_CONFIG,
+              ...parsedIdb,
+              hero: { ...DEFAULT_LANDING_CONFIG.hero, ...(parsedIdb.hero || {}) },
+              whyChoose: {
+                ...DEFAULT_LANDING_CONFIG.whyChoose,
+                ...(parsedIdb.whyChoose || {}),
+                items: Array.isArray(parsedIdb.whyChoose?.items) ? parsedIdb.whyChoose.items : DEFAULT_LANDING_CONFIG.whyChoose.items,
+              },
+              featuredShowcase: {
+                ...DEFAULT_LANDING_CONFIG.featuredShowcase,
+                ...(parsedIdb.featuredShowcase || {}),
+                points: Array.isArray(parsedIdb.featuredShowcase?.points) ? parsedIdb.featuredShowcase.points : DEFAULT_LANDING_CONFIG.featuredShowcase.points,
+                guarantees: Array.isArray(parsedIdb.featuredShowcase?.guarantees) ? parsedIdb.featuredShowcase.guarantees : DEFAULT_LANDING_CONFIG.featuredShowcase.guarantees,
+              },
+              newsletter: { ...DEFAULT_LANDING_CONFIG.newsletter, ...(parsedIdb.newsletter || {}) },
+              footer: { ...DEFAULT_LANDING_CONFIG.footer, ...(parsedIdb.footer || {}) },
+              products: Array.isArray(parsedIdb.products) && parsedIdb.products.length > 0 ? parsedIdb.products : DEFAULT_LANDING_CONFIG.products,
+              testimonials: Array.isArray(parsedIdb.testimonials) && parsedIdb.testimonials.length > 0 ? parsedIdb.testimonials : DEFAULT_LANDING_CONFIG.testimonials,
+              articles: Array.isArray(parsedIdb.articles) && parsedIdb.articles.length > 0 ? parsedIdb.articles : DEFAULT_LANDING_CONFIG.articles,
+              certifications: Array.isArray(parsedIdb.certifications) && parsedIdb.certifications.length > 0 ? parsedIdb.certifications : DEFAULT_LANDING_CONFIG.certifications,
+              verticalVideos: parsedIdb.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos,
+              customBlocks: (Array.isArray(parsedIdb.customBlocks) ? parsedIdb.customBlocks : []).filter((b: any) => b && b.type !== 'faq'),
+            };
+            setConfig((prev) => ({ ...prev, ...mergedIdb }));
           }
         } catch {
           // ignore
@@ -258,21 +279,30 @@ export const VisualEditorProvider: React.FC<{ children: React.ReactNode }> = ({ 
           if (data?.configJson) {
             try {
               const cloudConfig = JSON.parse(data.configJson);
-              if (cloudConfig?.hero && Array.isArray(cloudConfig?.products)) {
+              if (cloudConfig?.hero) {
                 const merged: LandingPageConfig = {
                   ...DEFAULT_LANDING_CONFIG,
                   ...cloudConfig,
                   hero: { ...DEFAULT_LANDING_CONFIG.hero, ...(cloudConfig.hero || {}) },
-                  whyChoose: { ...DEFAULT_LANDING_CONFIG.whyChoose, ...(cloudConfig.whyChoose || {}) },
-                  featuredShowcase: { ...DEFAULT_LANDING_CONFIG.featuredShowcase, ...(cloudConfig.featuredShowcase || {}) },
+                  whyChoose: {
+                    ...DEFAULT_LANDING_CONFIG.whyChoose,
+                    ...(cloudConfig.whyChoose || {}),
+                    items: Array.isArray(cloudConfig.whyChoose?.items) ? cloudConfig.whyChoose.items : DEFAULT_LANDING_CONFIG.whyChoose.items,
+                  },
+                  featuredShowcase: {
+                    ...DEFAULT_LANDING_CONFIG.featuredShowcase,
+                    ...(cloudConfig.featuredShowcase || {}),
+                    points: Array.isArray(cloudConfig.featuredShowcase?.points) ? cloudConfig.featuredShowcase.points : DEFAULT_LANDING_CONFIG.featuredShowcase.points,
+                    guarantees: Array.isArray(cloudConfig.featuredShowcase?.guarantees) ? cloudConfig.featuredShowcase.guarantees : DEFAULT_LANDING_CONFIG.featuredShowcase.guarantees,
+                  },
                   newsletter: { ...DEFAULT_LANDING_CONFIG.newsletter, ...(cloudConfig.newsletter || {}) },
                   footer: { ...DEFAULT_LANDING_CONFIG.footer, ...(cloudConfig.footer || {}) },
-                  products: cloudConfig.products && cloudConfig.products.length > 0 ? cloudConfig.products : DEFAULT_LANDING_CONFIG.products,
-                  testimonials: cloudConfig.testimonials && cloudConfig.testimonials.length > 0 ? cloudConfig.testimonials : DEFAULT_LANDING_CONFIG.testimonials,
-                  articles: cloudConfig.articles && cloudConfig.articles.length > 0 ? cloudConfig.articles : DEFAULT_LANDING_CONFIG.articles,
-                  certifications: cloudConfig.certifications && cloudConfig.certifications.length > 0 ? cloudConfig.certifications : DEFAULT_LANDING_CONFIG.certifications,
+                  products: Array.isArray(cloudConfig.products) && cloudConfig.products.length > 0 ? cloudConfig.products : DEFAULT_LANDING_CONFIG.products,
+                  testimonials: Array.isArray(cloudConfig.testimonials) && cloudConfig.testimonials.length > 0 ? cloudConfig.testimonials : DEFAULT_LANDING_CONFIG.testimonials,
+                  articles: Array.isArray(cloudConfig.articles) && cloudConfig.articles.length > 0 ? cloudConfig.articles : DEFAULT_LANDING_CONFIG.articles,
+                  certifications: Array.isArray(cloudConfig.certifications) && cloudConfig.certifications.length > 0 ? cloudConfig.certifications : DEFAULT_LANDING_CONFIG.certifications,
                   verticalVideos: cloudConfig.verticalVideos || DEFAULT_LANDING_CONFIG.verticalVideos,
-                  customBlocks: (cloudConfig.customBlocks || []).filter((b: any) => b && b.type !== 'faq'),
+                  customBlocks: (Array.isArray(cloudConfig.customBlocks) ? cloudConfig.customBlocks : []).filter((b: any) => b && b.type !== 'faq'),
                 };
 
                 // Hydrate unless admin is currently typing / editing unsaved changes in studio

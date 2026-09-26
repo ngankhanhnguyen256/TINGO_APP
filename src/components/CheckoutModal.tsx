@@ -549,10 +549,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
               {/* Order Items Preview (Thumbnails & Prices) */}
               <div className="p-3.5 bg-[#f8faf8] border border-slate-200/80 rounded-2xl space-y-2.5">
                 <span className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                  Sản phẩm trong đơn ({cartItems.reduce((a, b) => a + b.quantity, 0)})
+                  Sản phẩm trong đơn ({(cartItems || []).reduce((a, b) => a + (b.quantity || 1), 0)})
                 </span>
                 <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
-                  {cartItems.map((item) => {
+                  {(cartItems || []).map((item) => {
                     const origPrice =
                       item.product.originalPrice || Math.round(item.product.price * 1.18);
                     return (

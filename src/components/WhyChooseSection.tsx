@@ -153,7 +153,7 @@ export const WhyChooseSection: React.FC<WhyChooseSectionProps> = ({ onLearnMore 
 
         {/* 4 Feature Cards: 2 items per row on mobile just like product cards */}
         <div className="grid grid-cols-2 gap-2.5 sm:gap-6 lg:gap-8">
-          {whyChoose.items.map((item) => {
+          {(whyChoose.items || []).map((item) => {
             const scheme = getSchemeClasses(item.colorScheme);
 
             return (

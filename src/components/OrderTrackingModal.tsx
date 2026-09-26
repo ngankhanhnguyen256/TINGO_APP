@@ -712,16 +712,16 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
 
               <div className="pt-3 border-t border-slate-200">
                 <span className="text-xs font-bold text-slate-700 block mb-2">
-                  Sản phẩm đã đặt ({searchedOrder.items?.reduce((s, i) => s + i.quantity, 0)} món):
+                  Sản phẩm đã đặt ({(searchedOrder.items || []).reduce((s, i) => s + (i.quantity || 1), 0)} món):
                 </span>
                 <div className="space-y-1.5 text-xs">
-                  {searchedOrder.items?.map((it, idx) => (
+                  {(searchedOrder.items || []).map((it, idx) => (
                     <div key={idx} className="flex items-center justify-between text-slate-700">
                       <span className="truncate max-w-[280px]">
-                        {it.quantity}x {it.product.name}
+                        {it.quantity || 1}x {it.product?.name || (it as any)?.name || 'Sản phẩm'}
                       </span>
                       <span className="font-semibold text-slate-900 font-mono">
-                        {(it.product.price * it.quantity).toLocaleString('vi-VN')}₫
+                        {(((it.product?.price || 0) * (it.quantity || 1))).toLocaleString('vi-VN')}₫
                       </span>
                     </div>
                   ))}

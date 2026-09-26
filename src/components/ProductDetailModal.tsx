@@ -142,7 +142,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
                   <div className="space-y-2.5">
                     <p>{product.description}</p>
                     <div className="space-y-1.5 pt-1">
-                      {product.benefits.map((b, i) => (
+                      {(product.benefits || []).map((b, i) => (
                         <div key={i} className="flex items-start gap-2">
                           <CheckCircle2 className="w-4 h-4 text-[#008764] shrink-0 mt-0.5" />
                           <span className="text-slate-700 font-medium">{b}</span>
@@ -154,7 +154,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
                 {activeTab === 'ingredients' && (
                   <ul className="space-y-2">
-                    {product.ingredients.map((ing, i) => (
+                    {(product.ingredients || []).map((ing, i) => (
                       <li key={i} className="flex items-start gap-2">
                         <span className="w-1.5 h-1.5 rounded-full bg-[#008764] mt-2 shrink-0" />
                         <span className="text-slate-700">{ing}</span>
@@ -165,7 +165,7 @@ export const ProductDetailModal: React.FC<ProductDetailModalProps> = ({
 
                 {activeTab === 'usage' && (
                   <div className="space-y-2">
-                    {product.usageInstructions.map((step, i) => (
+                    {(product.usageInstructions || []).map((step, i) => (
                       <div key={i} className="flex items-start gap-2">
                         <span className="w-5 h-5 rounded-full bg-emerald-100 text-[#008764] font-bold text-[10px] flex items-center justify-center shrink-0">
                           {i + 1}
