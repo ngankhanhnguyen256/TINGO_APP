@@ -129,20 +129,20 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
 
     const handleInvalidation = (e: any) => {
-      const targetPhone = e.detail?.phone?.replace(/[\s.-]/g, '');
-      const targetEmail = e.detail?.email?.trim().toLowerCase();
+      const targetPhone = e.detail?.phone ? normalizeVietnamesePhone(e.detail.phone) : '';
+      const targetEmail = e.detail?.email ? e.detail.email.trim().toLowerCase() : '';
       const isBlocked = e.detail?.blocked === true;
       const isDeleted = e.detail?.deleted === true;
 
-      const currentPhone = customer?.phone?.replace(/[\s.-]/g, '');
-      const currentEmail = customer?.email?.trim().toLowerCase();
+      const currentPhone = customer?.phone ? normalizeVietnamesePhone(customer.phone) : '';
+      const currentEmail = customer?.email ? customer.email.trim().toLowerCase() : '';
 
-      if (
-        customer &&
-        (currentPhone === targetPhone ||
-          (currentEmail && currentEmail === targetEmail) ||
-          !targetPhone)
-      ) {
+      // Only match if phone or email is explicitly provided and matches the current session
+      const isMatch =
+        (targetPhone && currentPhone && currentPhone === targetPhone) ||
+        (targetEmail && currentEmail && currentEmail === targetEmail);
+
+      if (customer && isMatch) {
         setCustomer(null);
         localStorage.removeItem(STORAGE_KEY);
         localStorage.removeItem('tingo_checkout_draft');
@@ -169,41 +169,20 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
     return () => window.removeEventListener('tingo-customer-session-cleared', handleInvalidation);
   }, [customer]);
 
-  // Real-time Firestore Session Guard: If logged-in user gets blocked or deleted in Firestore, lock/kick them out immediately
+  // Real-time Firestore Session Guard: If logged-in user gets blocked in Firestore, lock/kick them out immediately
   useEffect(() => {
     if (!customer || customer.id === 'ADMIN-TINGO') return;
 
-    const cleanPhone = (customer.phone || '').replace(/[\s.-]/g, '');
-    if (!cleanPhone) return;
+    const cleanPhone = normalizeVietnamesePhone(customer.phone);
+    if (!cleanPhone || cleanPhone.length !== 10) return;
 
     try {
       const unsub = onSnapshot(doc(db, 'customers', cleanPhone), (snap) => {
-        if (!snap.exists()) {
-          // Document was deleted by Admin in Firestore - Force Logout immediately
-          setCustomer(null);
-          localStorage.removeItem(STORAGE_KEY);
-          localStorage.removeItem('tingo_checkout_draft');
-
-          // Clean local accounts cache for this phone/email
-          try {
-            const accs = getLocalAccounts();
-            if (accs[cleanPhone]) delete accs[cleanPhone];
-            if (customer.email && accs[customer.email.toLowerCase()]) delete accs[customer.email.toLowerCase()];
-            localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(accs));
-          } catch {
-            // ignore
-          }
-
-          setBlockedAlertNotice({
-            type: 'deleted',
-            title: 'TÀI KHOẢN ĐÃ ĐƯỢC XÓA KHỎI HỆ THỐNG',
-            message:
-              'Tài khoản của bạn đã được Quản trị viên xóa khỏi hệ thống TINGO. Bạn đã bị đăng xuất tự động. Để tiếp tục mua sắm và nhận lại 5 mã Freeship cùng các ưu đãi, quý khách vui lòng Đăng ký lại tài khoản mới.',
-          });
-        } else {
+        // ONLY trigger logout if the document exists AND is explicitly marked as blocked by Admin
+        if (snap.exists()) {
           const data = snap.data() as CustomerUser;
-          if (data.isBlocked) {
-            // Account was marked as blocked by Admin
+          if (data && data.isBlocked === true) {
+            // Account was explicitly marked as blocked by Admin
             setCustomer(null);
             localStorage.removeItem(STORAGE_KEY);
             localStorage.removeItem('tingo_checkout_draft');
@@ -238,7 +217,10 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
   const getLocalBlockedList = (): string[] => {
     try {
       const raw = localStorage.getItem(BLOCKED_CACHE_KEY);
-      return raw ? JSON.parse(raw) : [];
+      if (!raw) return [];
+      const list = JSON.parse(raw);
+      if (!Array.isArray(list)) return [];
+      return list.filter((item) => typeof item === 'string' && item.trim().length > 0);
     } catch {
       return [];
     }
@@ -247,32 +229,36 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
   // Helper to check if a phone or email is blocked across Firestore & local cache
   const checkIfBlocked = async (phone: string, email?: string): Promise<{ blocked: boolean; reason?: string }> => {
     const cleanPhone = normalizeVietnamesePhone(phone);
-    const cleanEmail = email?.trim().toLowerCase();
+    const cleanEmail = email ? email.trim().toLowerCase() : '';
 
     // 1. Check local blocked cache first (instant)
     const localBlocked = getLocalBlockedList();
-    if (cleanPhone && localBlocked.includes(cleanPhone)) {
+    if (cleanPhone && cleanPhone.length === 10 && localBlocked.includes(cleanPhone)) {
       return { blocked: true, reason: 'Số điện thoại này đã bị chặn' };
     }
-    if (cleanEmail && localBlocked.includes(cleanEmail)) {
+    if (cleanEmail && cleanEmail.includes('@') && localBlocked.includes(cleanEmail)) {
       return { blocked: true, reason: 'Email này đã bị chặn' };
     }
 
     // 2. Check Firestore blocked_identifiers with short timeout
     try {
-      if (cleanPhone) {
-        const snap = await safeWithTimeout(getDoc(doc(db, 'blocked_identifiers', cleanPhone)), null, 1000);
+      if (cleanPhone && cleanPhone.length === 10) {
+        const snap = await safeWithTimeout(getDoc(doc(db, 'blocked_identifiers', cleanPhone)), null, 800);
         if (snap && snap.exists()) {
           const data = snap.data();
-          return { blocked: true, reason: data.reason || 'Số điện thoại này đã bị chặn' };
+          if (data && data.reason !== 'UNBLOCKED') {
+            return { blocked: true, reason: data.reason || 'Số điện thoại này đã bị chặn' };
+          }
         }
       }
-      if (cleanEmail) {
+      if (cleanEmail && cleanEmail.includes('@')) {
         const encodedEmail = encodeURIComponent(cleanEmail);
-        const snapEmail = await safeWithTimeout(getDoc(doc(db, 'blocked_identifiers', encodedEmail)), null, 1000);
+        const snapEmail = await safeWithTimeout(getDoc(doc(db, 'blocked_identifiers', encodedEmail)), null, 800);
         if (snapEmail && snapEmail.exists()) {
           const data = snapEmail.data();
-          return { blocked: true, reason: data.reason || 'Email này đã bị chặn' };
+          if (data && data.reason !== 'UNBLOCKED') {
+            return { blocked: true, reason: data.reason || 'Email này đã bị chặn' };
+          }
         }
       }
     } catch (err) {
@@ -281,10 +267,13 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     // 3. Check customer doc isBlocked status
     try {
-      if (cleanPhone) {
-        const cusSnap = await safeWithTimeout(getDoc(doc(db, 'customers', cleanPhone)), null, 1000);
-        if (cusSnap && cusSnap.exists() && cusSnap.data().isBlocked === true) {
-          return { blocked: true, reason: cusSnap.data().blockedReason || 'Tài khoản đang bị tạm khóa' };
+      if (cleanPhone && cleanPhone.length === 10) {
+        const cusSnap = await safeWithTimeout(getDoc(doc(db, 'customers', cleanPhone)), null, 800);
+        if (cusSnap && cusSnap.exists()) {
+          const cData = cusSnap.data();
+          if (cData && cData.isBlocked === true) {
+            return { blocked: true, reason: cData.blockedReason || 'Tài khoản đang bị tạm khóa' };
+          }
         }
       }
     } catch (err) {
@@ -421,6 +410,18 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       registeredAt: new Date().toISOString(),
       lastLoginAt: new Date().toISOString(),
     };
+
+    // Clean any stale blocked identifier records for this phone/email
+    try {
+      const rawBlocked = localStorage.getItem(BLOCKED_CACHE_KEY);
+      if (rawBlocked) {
+        const list: string[] = JSON.parse(rawBlocked);
+        const filtered = list.filter((i) => i !== cleanPhone && i !== cleanEmail);
+        localStorage.setItem(BLOCKED_CACHE_KEY, JSON.stringify(filtered));
+      }
+    } catch {
+      // ignore
+    }
 
     // Save to Local Accounts Cache immediately (100% fail-proof)
     saveLocalAccount(userWithPass);

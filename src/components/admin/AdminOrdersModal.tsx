@@ -912,7 +912,12 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
     };
 
     try {
-      await setDoc(doc(db, 'customers', cleanPhone), newCus);
+      await setDoc(doc(db, 'customers', cleanPhone), sanitizeFirestoreData(newCus), { merge: true });
+      await deleteDoc(doc(db, 'blocked_identifiers', cleanPhone)).catch(() => {});
+      if (newCustomerForm.email) {
+        await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(newCustomerForm.email.toLowerCase()))).catch(() => {});
+      }
+      removeLocalBlockedCache(cleanPhone, newCustomerForm.email);
       setCustomers((prev) => [newCus, ...prev.filter((c) => c.phone !== cleanPhone)]);
       setSelectedCustomer(newCus);
       // Synchronize immediately to Google Sheet
