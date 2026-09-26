@@ -65,7 +65,8 @@ import {
   getTelegramConfig,
   saveTelegramConfig,
   sendTelegramMessage,
-  notifyCancelOrder
+  notifyCancelOrder,
+  notifyNewRegistration
 } from '../../lib/telegram';
 import { formatVietnameseDateTime } from '../../utils/dateFormatter';
 import { sanitizeFirestoreData } from '../../utils/sanitizeFirestore';
@@ -228,9 +229,62 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
     }
   }, [isOpen, localOrders]);
 
-  // Real-time Firestore synchronization for Customers
+  // Real-time Firestore synchronization for Customers (Merged with Local Cache & Auto-Heal)
   useEffect(() => {
     if (!isOpen) return;
+
+    const mergeCustomers = (firebaseList: CustomerUser[]) => {
+      const map: Record<string, CustomerUser> = {};
+
+      // 1. Fill from local accounts cache
+      try {
+        const raw = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          Object.values(parsed).forEach((item: any) => {
+            if (item && item.phone) {
+              const clean = item.phone.replace(/[\s.-]/g, '');
+              map[clean] = {
+                id: item.id || `CUS-${clean}`,
+                name: item.name || 'Khách hàng',
+                phone: clean,
+                email: item.email || '',
+                address: item.address || '',
+                city: item.city || 'Hồ Chí Minh',
+                district: item.district || 'Quận 1',
+                freeshipVouchers: typeof item.freeshipVouchers === 'number' ? item.freeshipVouchers : 5,
+                isFirstOrder: item.isFirstOrder !== false,
+                isBlocked: !!item.isBlocked,
+                createdAt: item.createdAt || item.registeredAt || new Date().toISOString(),
+              };
+            }
+          });
+        }
+      } catch {
+        // ignore
+      }
+
+      // 2. Override with Firestore data (Source of truth)
+      firebaseList.forEach((fc) => {
+        const clean = fc.phone.replace(/[\s.-]/g, '');
+        map[clean] = fc;
+      });
+
+      // 3. Auto-sync any local account missing from Firestore
+      Object.values(map).forEach((cus) => {
+        if (!firebaseList.some((fc) => fc.phone.replace(/[\s.-]/g, '') === cus.phone)) {
+          setDoc(doc(db, 'customers', cus.phone), sanitizeFirestoreData(cus), { merge: true }).catch(() => {});
+        }
+      });
+
+      const sorted = Object.values(map).sort((a, b) => {
+        const timeA = new Date(a.createdAt).getTime() || 0;
+        const timeB = new Date(b.createdAt).getTime() || 0;
+        return timeB - timeA;
+      });
+
+      setCustomers(sorted);
+    };
 
     try {
       const unsubscribe = onSnapshot(
@@ -257,23 +311,31 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
             });
           });
 
-          // Sort latest created / registered customers first
-          const sorted = loadedCustomers.sort((a, b) => {
-            const timeA = new Date(a.createdAt).getTime() || 0;
-            const timeB = new Date(b.createdAt).getTime() || 0;
-            return timeB - timeA;
-          });
-
-          setCustomers(sorted);
+          mergeCustomers(loadedCustomers);
         },
         (error) => {
           console.warn('Firestore customers listener error:', error);
+          mergeCustomers([]);
         }
       );
 
-      return () => unsubscribe();
+      // Listen for instant registration events
+      const handleNewReg = (e: any) => {
+        if (e.detail && e.detail.phone) {
+          const newCust = e.detail as CustomerUser;
+          setCustomers((prev) => [newCust, ...prev.filter((c) => c.phone !== newCust.phone)]);
+        }
+      };
+
+      window.addEventListener('tingo-customer-registered', handleNewReg);
+
+      return () => {
+        unsubscribe();
+        window.removeEventListener('tingo-customer-registered', handleNewReg);
+      };
     } catch (err) {
       console.warn('Firestore customers init error:', err);
+      mergeCustomers([]);
     }
   }, [isOpen]);
 
@@ -892,8 +954,8 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
   const handleCreateCustomer = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanPhone = newCustomerForm.phone.trim().replace(/[\s.-]/g, '');
-    if (!cleanPhone || !newCustomerForm.name) {
-      alert('Vui lòng nhập họ tên và số điện thoại');
+    if (!cleanPhone || !newCustomerForm.name.trim()) {
+      alert('Vui lòng nhập họ tên và số điện thoại hợp lệ');
       return;
     }
 
@@ -912,16 +974,43 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
     };
 
     try {
+      // 1. Save to local cache
+      try {
+        const raw = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+        const accs = raw ? JSON.parse(raw) : {};
+        accs[cleanPhone] = newCus;
+        localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(accs));
+      } catch {
+        // ignore
+      }
+
+      // 2. Save to Firestore
       await setDoc(doc(db, 'customers', cleanPhone), sanitizeFirestoreData(newCus), { merge: true });
       await deleteDoc(doc(db, 'blocked_identifiers', cleanPhone)).catch(() => {});
       if (newCustomerForm.email) {
         await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(newCustomerForm.email.toLowerCase()))).catch(() => {});
       }
       removeLocalBlockedCache(cleanPhone, newCustomerForm.email);
+
+      // 3. Notify Telegram Bot
+      try {
+        notifyNewRegistration(newCus).catch(() => {});
+      } catch {
+        // ignore
+      }
+
+      // 4. Synchronize immediately to Google Sheet
+      appendCustomerToGoogleSheet(newCus).catch(() => {});
+
+      // 5. Broadcast to local listeners
+      window.dispatchEvent(
+        new CustomEvent('tingo-customer-registered', {
+          detail: newCus,
+        })
+      );
+
       setCustomers((prev) => [newCus, ...prev.filter((c) => c.phone !== cleanPhone)]);
       setSelectedCustomer(newCus);
-      // Synchronize immediately to Google Sheet
-      appendCustomerToGoogleSheet(newCus).catch(() => {});
       setIsNewCustomerModalOpen(false);
       setNewCustomerForm({
         name: '',
@@ -932,8 +1021,15 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
         district: 'Quận 1',
         freeshipVouchers: 5,
       });
+
+      setActionToast({
+        type: 'success',
+        message: `Đã tạo thành công khách hàng ${newCus.name} (SĐT: ${cleanPhone}) và đồng bộ sang Google Sheets!`,
+      });
+      setTimeout(() => setActionToast(null), 4000);
     } catch (err) {
       console.error('Failed to create customer', err);
+      alert('Lỗi khi tạo tài khoản khách hàng. Vui lòng thử lại.');
     }
   };
 

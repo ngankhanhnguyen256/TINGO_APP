@@ -440,7 +440,7 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     // Send Telegram Notification in real-time
     try {
-      safeWithTimeout(notifyNewRegistration(newUser), null, 1500).catch((err) => {
+      notifyNewRegistration(newUser).catch((err) => {
         console.warn('Telegram registration alert note:', err);
       });
     } catch (err) {
@@ -449,10 +449,22 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
 
     // Auto-append Customer to Google Sheets (luôn lấy Google Sheet làm trung tâm)
     try {
-      await safeWithTimeout(appendCustomerToGoogleSheet(newUser), false, 1800);
+      appendCustomerToGoogleSheet(newUser).catch((err) => {
+        console.warn('Google Sheets customer sync notice:', err);
+        queuePendingCustomer(newUser);
+      });
     } catch (err) {
-      console.warn('Google Sheets customer sync notice:', err);
+      console.warn('Google Sheets customer sync trigger note:', err);
       queuePendingCustomer(newUser);
+    }
+
+    // Broadcast customer registration across tabs and admin panels
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent('tingo-customer-registered', {
+          detail: newUser,
+        })
+      );
     }
 
     setCustomer(newUser);

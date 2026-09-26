@@ -41,6 +41,7 @@ import {
   fetchCustomersFromGoogleSheet,
   fetchOrdersFromGoogleSheet,
   syncAllExistingCustomers,
+  flushPendingSyncQueues,
   APPS_SCRIPT_TEMPLATE,
 } from '../../lib/googleSheetsService';
 import { Order, CustomerUser } from '../../types';
@@ -284,8 +285,15 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       text: 'Đang rà soát và đồng bộ toàn bộ tài khoản khách hàng từ App + Local Cache vào Firebase và Google Sheets...',
     });
 
+    const maxTimer = setTimeout(() => {
+      setIsSyncing(false);
+      setSyncType(null);
+    }, 6000);
+
     try {
+      await flushPendingSyncQueues();
       const res = await syncAllExistingCustomers();
+      clearTimeout(maxTimer);
       setPendingStats(getPendingSyncCounts());
       setSyncStatusMsg({
         type: 'success',
@@ -295,11 +303,13 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
 • Đã nạp vào Google Sheets (kèm STT 1-1000 & Dropdown Tình Trạng): ${res.googleSheetsSynced}`,
       });
     } catch (err: any) {
+      clearTimeout(maxTimer);
       setSyncStatusMsg({
         type: 'error',
         text: `Lỗi khi rà soát đồng bộ khách hàng: ${err.message}`,
       });
     } finally {
+      clearTimeout(maxTimer);
       setIsSyncing(false);
       setSyncType(null);
     }
@@ -313,8 +323,15 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       text: 'Đang rà soát và đồng bộ hai chiều (Google Sheet làm trung tâm ⇄ Firebase / Local)...',
     });
 
+    const maxTimer = setTimeout(() => {
+      setIsSyncing(false);
+      setSyncType(null);
+    }, 6000);
+
     try {
+      await flushPendingSyncQueues();
       const res = await reconcileAndSyncAll(orders, currentCustomers);
+      clearTimeout(maxTimer);
       setPendingStats(getPendingSyncCounts());
 
       if (res.success) {
@@ -331,11 +348,13 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
         });
       }
     } catch (err: any) {
+      clearTimeout(maxTimer);
       setSyncStatusMsg({
         type: 'error',
         text: err.message || 'Lỗi xử lý đồng bộ hai chiều',
       });
     } finally {
+      clearTimeout(maxTimer);
       setIsSyncing(false);
       setSyncType(null);
     }

@@ -457,12 +457,15 @@ export const sendToGoogleSheetWebhook = async (payload: {
 
   if (!webhookUrl) {
     try {
-      const snap = await safeWithTimeout(getDoc(doc(db, 'system_settings', 'google_sheets')), null, 1200);
-      if (snap && snap.exists() && snap.data().webhookUrl) {
-        webhookUrl = snap.data().webhookUrl;
-        inMemoryWebhookUrl = webhookUrl;
-        if (webhookUrl) {
-          localStorage.setItem(WEBHOOK_URL_STORAGE_KEY, webhookUrl);
+      const snap = await safeWithTimeout(getDoc(doc(db, 'system_settings', 'google_sheets')), null, 1500);
+      if (snap && snap.exists()) {
+        const data = snap.data();
+        if (data && data.webhookUrl) {
+          webhookUrl = data.webhookUrl.trim();
+          inMemoryWebhookUrl = webhookUrl;
+          if (webhookUrl) {
+            localStorage.setItem(WEBHOOK_URL_STORAGE_KEY, webhookUrl);
+          }
         }
       }
     } catch {
@@ -470,8 +473,8 @@ export const sendToGoogleSheetWebhook = async (payload: {
     }
   }
 
-  if (!webhookUrl) {
-    console.warn('sendToGoogleSheetWebhook: No Webhook URL configured');
+  if (!webhookUrl || !webhookUrl.startsWith('http')) {
+    console.warn('sendToGoogleSheetWebhook: No valid Webhook URL configured');
     return false;
   }
 
@@ -486,7 +489,7 @@ export const sendToGoogleSheetWebhook = async (payload: {
       body: JSON.stringify(payload),
     });
 
-    await safeWithTimeout(fetchPromise, null, 3000);
+    await safeWithTimeout(fetchPromise, null, 3500);
     return true;
   } catch (err) {
     console.warn('Google Sheet Webhook send note:', err);
@@ -882,6 +885,82 @@ export const appendOrderToGoogleSheet = async (
   return true;
 };
 
+export const flushPendingSyncQueues = async () => {
+  const webhookUrl = getSavedWebhookUrl();
+  if (!webhookUrl) return;
+
+  try {
+    // 1. Flush pending sheets customers
+    const rawCust = localStorage.getItem(PENDING_SHEETS_CUSTOMERS_KEY);
+    if (rawCust) {
+      const list: CustomerUser[] = JSON.parse(rawCust);
+      if (list.length > 0) {
+        const ok = await sendToGoogleSheetWebhook({
+          type: 'bulk_customers',
+          data: list.map((c) => ({
+            ...c,
+            status: c.isBlocked ? 'Bị khóa' : 'Hoạt động',
+          })),
+        });
+        if (ok) {
+          localStorage.removeItem(PENDING_SHEETS_CUSTOMERS_KEY);
+        }
+      }
+    }
+
+    // 2. Flush pending sheets orders
+    const rawOrd = localStorage.getItem(PENDING_SHEETS_ORDERS_KEY);
+    if (rawOrd) {
+      const list: Order[] = JSON.parse(rawOrd);
+      if (list.length > 0) {
+        const ok = await sendToGoogleSheetWebhook({
+          type: 'bulk_orders',
+          data: list,
+        });
+        if (ok) {
+          localStorage.removeItem(PENDING_SHEETS_ORDERS_KEY);
+        }
+      }
+    }
+
+    // 3. Flush pending firestore customers
+    const rawFireCust = localStorage.getItem(PENDING_FIRESTORE_CUSTOMERS_KEY);
+    if (rawFireCust) {
+      const list: CustomerUser[] = JSON.parse(rawFireCust);
+      if (list.length > 0) {
+        for (const c of list) {
+          if (c.phone) {
+            setDoc(doc(db, 'customers', c.phone), sanitizeFirestoreData(c), { merge: true }).catch(() => {});
+          }
+        }
+        localStorage.removeItem(PENDING_FIRESTORE_CUSTOMERS_KEY);
+      }
+    }
+
+    // 4. Flush pending firestore orders
+    const rawFireOrd = localStorage.getItem(PENDING_FIRESTORE_ORDERS_KEY);
+    if (rawFireOrd) {
+      const list: Order[] = JSON.parse(rawFireOrd);
+      if (list.length > 0) {
+        for (const o of list) {
+          if (o.id) {
+            setDoc(doc(db, 'orders', o.id), sanitizeFirestoreData(o), { merge: true }).catch(() => {});
+          }
+        }
+        localStorage.removeItem(PENDING_FIRESTORE_ORDERS_KEY);
+      }
+    }
+  } catch (err) {
+    console.warn('flushPendingSyncQueues note:', err);
+  }
+};
+
+// Auto-run queue flusher on start and every 25 seconds
+if (typeof window !== 'undefined') {
+  setTimeout(() => flushPendingSyncQueues(), 3000);
+  setInterval(() => flushPendingSyncQueues(), 25000);
+}
+
 export const appendCustomerToGoogleSheet = async (
   customer: CustomerUser,
   token?: string
@@ -889,64 +968,49 @@ export const appendCustomerToGoogleSheet = async (
   let sentViaAny = false;
 
   // 1. Send via Webhook (Works for 100% of visitor registrations 24/7)
-  const okWebhook = await sendToGoogleSheetWebhook({
-    type: 'customer',
-    data: {
-      ...customer,
-      status: customer.isBlocked ? 'Bị khóa' : 'Hoạt động',
-    },
-  });
-  if (okWebhook) sentViaAny = true;
+  try {
+    const okWebhook = await sendToGoogleSheetWebhook({
+      type: 'customer',
+      data: {
+        ...customer,
+        status: customer.isBlocked ? 'Bị khóa' : 'Hoạt động',
+      },
+    });
+    if (okWebhook) sentViaAny = true;
+  } catch (err) {
+    console.warn('appendCustomerToGoogleSheet webhook note:', err);
+  }
 
-  // 2. If OAuth token available, also sync via Google Sheets REST API
+  // 2. If OAuth token available, also background sync via Google Sheets REST API
   const activeToken = token || getGoogleAccessToken();
   let sheetId = getSavedSheetId();
 
-  if (activeToken) {
-    if (!sheetId) {
-      try {
-        const created = await createTingoSpreadsheet(activeToken);
-        sheetId = created.id;
-      } catch {
-        // quiet catch
-      }
-    }
+  if (activeToken && sheetId) {
+    const rowValues = [
+      1,
+      customer.id,
+      customer.name,
+      "'" + customer.phone,
+      customer.email || '',
+      customer.address || '',
+      customer.city || '',
+      customer.createdAt || new Date().toISOString(),
+      customer.freeshipVouchers ?? 5,
+      customer.isBlocked ? 'Bị khóa' : 'Hoạt động',
+    ];
 
-    if (sheetId) {
-      const rowValues = [
-        1,
-        customer.id,
-        customer.name,
-        "'" + customer.phone,
-        customer.email || '',
-        customer.address || '',
-        customer.city || '',
-        customer.createdAt || new Date().toISOString(),
-        customer.freeshipVouchers ?? 5,
-        customer.isBlocked ? 'Bị khóa' : 'Hoạt động',
-      ];
-
-      try {
-        const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/KHÁCH HÀNG!A:J:append?valueInputOption=USER_ENTERED`;
-        const res = await safeWithTimeout(
-          fetch(url, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${activeToken}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ values: [rowValues] }),
-          }),
-          null,
-          2500
-        );
-
-        if (res && res.ok) {
-          sentViaAny = true;
-        }
-      } catch {
-        // ignore
-      }
+    try {
+      const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/KHÁCH HÀNG!A:J:append?valueInputOption=USER_ENTERED`;
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ values: [rowValues] }),
+      }).catch(() => {});
+    } catch {
+      // ignore
     }
   }
 
