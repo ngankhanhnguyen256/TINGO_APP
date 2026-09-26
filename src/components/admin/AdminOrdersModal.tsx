@@ -471,9 +471,6 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
         updatePayload.cancelReason = updatePayload.cancelReason || 'Quản trị viên hủy đơn';
       }
 
-      const orderRef = doc(db, 'orders', orderId);
-      await updateDoc(orderRef, sanitizeFirestoreData(updatePayload));
-
       const updatedOrder: Order = {
         ...(currentOrder || ({} as Order)),
         ...updatePayload,
@@ -482,6 +479,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
         timeline: updatedTimeline,
       };
 
+      // 1. Immediate UI state update
       setOrders((prev) =>
         prev.map((o) => (o.id === orderId ? updatedOrder : o))
       );
@@ -489,7 +487,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
         setSelectedOrder(updatedOrder);
       }
 
-      // Update LocalStorage
+      // 2. Immediate LocalStorage update
       try {
         const raw = localStorage.getItem('tingo_orders_storage');
         if (raw) {
@@ -501,30 +499,55 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
         // ignore
       }
 
-      // Sync status change directly to Google Sheets Webhook
-      try {
-        appendOrderToGoogleSheet(updatedOrder).catch(() => {});
-        sendToGoogleSheetWebhook({
-          type: 'order',
-          data: updatedOrder,
-        }).catch(() => {});
-      } catch (sheetErr) {
-        console.warn('Google Sheets status sync note:', sheetErr);
-      }
+      setActionToast({
+        type: 'success',
+        message: `Đã cập nhật trạng thái đơn #${orderId} sang ${
+          newStatus === 'pending'
+            ? 'Chờ xử lý'
+            : newStatus === 'processing'
+            ? 'Chuẩn bị hàng'
+            : newStatus === 'shipping'
+            ? 'Giao hàng'
+            : newStatus === 'delivered'
+            ? 'Hoàn thành'
+            : 'Đã hủy'
+        }!`,
+      });
+      setTimeout(() => setActionToast(null), 3000);
 
-      // If cancelled by admin, also notify telegram
-      if (newStatus === 'cancelled' && currentOrder) {
+      // 3. Background sync to Firestore, Sheets & Telegram
+      const syncTask = async () => {
         try {
-          await notifyCancelOrder(updatedOrder, 'Quản trị viên hủy đơn', 'admin');
-        } catch (e) {
-          console.warn('Admin cancel notification error:', e);
+          const orderRef = doc(db, 'orders', orderId);
+          await setDoc(orderRef, sanitizeFirestoreData(updatedOrder), { merge: true }).catch(() => {});
+        } catch (err) {
+          console.warn('Firestore status update note:', err);
         }
-      }
+
+        // Sync status change directly to Google Sheets Webhook
+        try {
+          appendOrderToGoogleSheet(updatedOrder).catch(() => {});
+          sendToGoogleSheetWebhook({
+            type: 'order',
+            data: updatedOrder,
+          }).catch(() => {});
+        } catch (sheetErr) {
+          console.warn('Google Sheets status sync note:', sheetErr);
+        }
+
+        // If cancelled by admin, notify telegram
+        if (newStatus === 'cancelled' && currentOrder) {
+          try {
+            notifyCancelOrder(updatedOrder, 'Quản trị viên hủy đơn', 'admin').catch(() => {});
+          } catch (e) {
+            console.warn('Admin cancel notification error:', e);
+          }
+        }
+      };
+
+      syncTask();
     } catch (err) {
-      console.error('Failed to update order status on Firestore', err);
-      setOrders((prev) =>
-        prev.map((o) => (o.id === orderId ? { ...o, status: newStatus } : o))
-      );
+      console.error('Failed to update order status', err);
     } finally {
       setIsUpdatingOrder(false);
     }
@@ -649,65 +672,55 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
    */
   const executeDeleteCustomer = async (phone: string, email?: string) => {
     setIsActionLoading(true);
+    const cleanPhone = normalizeVietnamesePhone(phone) || phone.trim().replace(/[\s.-]/g, '');
+    const cleanEmail = email?.trim().toLowerCase();
+
     try {
-      const cleanPhone = phone.trim().replace(/[\s.-]/g, '');
-      const cleanEmail = email?.trim().toLowerCase();
-
-      // 1. Delete customer doc from Firestore: customers/{cleanPhone} and customers/CUS-{cleanPhone}
-      await deleteDoc(doc(db, 'customers', cleanPhone)).catch(() => {});
-      await deleteDoc(doc(db, 'customers', `CUS-${cleanPhone}`)).catch(() => {});
-
-      // Query and delete any doc where phone matches cleanPhone exactly
-      try {
-        const phoneQ = query(collection(db, 'customers'), where('phone', '==', cleanPhone));
-        const phoneSnap = await getDocs(phoneQ);
-        for (const docSnap of phoneSnap.docs) {
-          if (docSnap.id === cleanPhone || docSnap.id === `CUS-${cleanPhone}` || docSnap.data().phone === cleanPhone) {
-            await deleteDoc(docSnap.ref).catch(() => {});
-          }
-        }
-      } catch (e) {
-        console.warn('Phone docs delete query note:', e);
+      // 1. Immediate UI state update
+      setCustomers((prev) => prev.filter((c) => (normalizeVietnamesePhone(c.phone) || c.phone) !== cleanPhone));
+      setSelectedCustomerPhones((prev) => prev.filter((p) => (normalizeVietnamesePhone(p) || p) !== cleanPhone));
+      if (selectedCustomer && (normalizeVietnamesePhone(selectedCustomer.phone) || selectedCustomer.phone) === cleanPhone) {
+        setSelectedCustomer(null);
       }
 
-      // 2. Delete blocked entries if any
-      await deleteDoc(doc(db, 'blocked_identifiers', cleanPhone)).catch(() => {});
-      if (cleanEmail) {
-        await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(cleanEmail))).catch(() => {});
-      }
-
-      // 3. Purge from local caches & sessions
+      // 2. Purge from local caches & sessions immediately
       purgeLocalAccountData(cleanPhone, cleanEmail);
 
-      // 3b. Sync status 'Đã xóa' to Google Sheet
-      updateCustomerStatusInGoogleSheet(cleanPhone, 'Đã xóa').catch(() => {});
-
-      // 4. Notify client session to immediately clear & show alert
+      // 3. Notify client session to immediately clear & show alert
       window.dispatchEvent(
         new CustomEvent('tingo-customer-session-cleared', {
           detail: { phone: cleanPhone, email: cleanEmail, blocked: false, deleted: true },
         })
       );
 
-      // 5. Update UI state
-      setCustomers((prev) => prev.filter((c) => c.phone.trim().replace(/[\s.-]/g, '') !== cleanPhone));
-      setSelectedCustomerPhones((prev) => prev.filter((p) => p.trim().replace(/[\s.-]/g, '') !== cleanPhone));
-      if (selectedCustomer && selectedCustomer.phone.trim().replace(/[\s.-]/g, '') === cleanPhone) {
-        setSelectedCustomer(null);
-      }
-
       setActionToast({
         type: 'success',
         message: `Đã XÓA VĨNH VIỄN khách hàng (SĐT: ${cleanPhone}). Dữ liệu đã được giải phóng hoàn toàn!`,
       });
-      setTimeout(() => setActionToast(null), 4500);
+      setTimeout(() => setActionToast(null), 4000);
+
+      // 4. Background non-blocking delete from Firestore & Google Sheets
+      const backgroundTask = async () => {
+        try {
+          await deleteDoc(doc(db, 'customers', cleanPhone)).catch(() => {});
+          await deleteDoc(doc(db, 'customers', `CUS-${cleanPhone}`)).catch(() => {});
+
+          // Delete blocked entries if any
+          await deleteDoc(doc(db, 'blocked_identifiers', cleanPhone)).catch(() => {});
+          if (cleanEmail) {
+            await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(cleanEmail))).catch(() => {});
+          }
+
+          // Sync status 'Đã xóa' to Google Sheet
+          updateCustomerStatusInGoogleSheet(cleanPhone, 'Đã xóa').catch(() => {});
+        } catch (e) {
+          console.warn('Firestore delete customer note:', e);
+        }
+      };
+
+      backgroundTask();
     } catch (err) {
       console.error('Failed to delete customer', err);
-      setActionToast({
-        type: 'error',
-        message: 'Lỗi khi xóa khách hàng. Vui lòng thử lại.',
-      });
-      setTimeout(() => setActionToast(null), 4500);
     } finally {
       setIsActionLoading(false);
       setDeleteConfirmState(null);
@@ -718,24 +731,29 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
     if (selectedCustomerPhones.length === 0) return;
 
     setIsActionLoading(true);
+    const phonesToDelete = [...selectedCustomerPhones].map((p) => normalizeVietnamesePhone(p) || p);
+    const targets = customers.filter((c) =>
+      phonesToDelete.includes(normalizeVietnamesePhone(c.phone) || c.phone)
+    );
+
     try {
-      const phonesToDelete = [...selectedCustomerPhones].map((p) => p.trim().replace(/[\s.-]/g, ''));
-      const targets = customers.filter((c) =>
-        phonesToDelete.includes(c.phone.trim().replace(/[\s.-]/g, ''))
+      // 1. Immediate UI state update
+      setCustomers((prev) =>
+        prev.filter((c) => !phonesToDelete.includes(normalizeVietnamesePhone(c.phone) || c.phone))
       );
+      if (
+        selectedCustomer &&
+        phonesToDelete.includes(normalizeVietnamesePhone(selectedCustomer.phone) || selectedCustomer.phone)
+      ) {
+        setSelectedCustomer(null);
+      }
+      setSelectedCustomerPhones([]);
 
+      // 2. Immediate LocalStorage purge
       for (const cus of targets) {
-        const cleanPhone = cus.phone.trim().replace(/[\s.-]/g, '');
+        const cleanPhone = normalizeVietnamesePhone(cus.phone) || cus.phone;
         const cleanEmail = cus.email?.trim().toLowerCase();
-
-        await deleteDoc(doc(db, 'customers', cleanPhone)).catch(() => {});
-        await deleteDoc(doc(db, 'customers', `CUS-${cleanPhone}`)).catch(() => {});
-        await deleteDoc(doc(db, 'blocked_identifiers', cleanPhone)).catch(() => {});
-        if (cleanEmail) {
-          await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(cleanEmail))).catch(() => {});
-        }
         purgeLocalAccountData(cleanPhone, cleanEmail);
-        updateCustomerStatusInGoogleSheet(cleanPhone, 'Đã xóa').catch(() => {});
 
         window.dispatchEvent(
           new CustomEvent('tingo-customer-session-cleared', {
@@ -744,29 +762,31 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
         );
       }
 
-      setCustomers((prev) =>
-        prev.filter((c) => !phonesToDelete.includes(c.phone.trim().replace(/[\s.-]/g, '')))
-      );
-      if (
-        selectedCustomer &&
-        phonesToDelete.includes(selectedCustomer.phone.trim().replace(/[\s.-]/g, ''))
-      ) {
-        setSelectedCustomer(null);
-      }
-      setSelectedCustomerPhones([]);
-
       setActionToast({
         type: 'success',
         message: `Đã XÓA VĨNH VIỄN ${targets.length} tài khoản khách hàng đã chọn!`,
       });
-      setTimeout(() => setActionToast(null), 4500);
+      setTimeout(() => setActionToast(null), 4000);
+
+      // 3. Background delete from Firestore & Sheets
+      const backgroundTask = async () => {
+        for (const cus of targets) {
+          const cleanPhone = normalizeVietnamesePhone(cus.phone) || cus.phone;
+          const cleanEmail = cus.email?.trim().toLowerCase();
+
+          await deleteDoc(doc(db, 'customers', cleanPhone)).catch(() => {});
+          await deleteDoc(doc(db, 'customers', `CUS-${cleanPhone}`)).catch(() => {});
+          await deleteDoc(doc(db, 'blocked_identifiers', cleanPhone)).catch(() => {});
+          if (cleanEmail) {
+            await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(cleanEmail))).catch(() => {});
+          }
+          updateCustomerStatusInGoogleSheet(cleanPhone, 'Đã xóa').catch(() => {});
+        }
+      };
+
+      backgroundTask();
     } catch (err) {
       console.error('Bulk delete error', err);
-      setActionToast({
-        type: 'error',
-        message: 'Lỗi khi xóa hàng loạt khách hàng.',
-      });
-      setTimeout(() => setActionToast(null), 4500);
     } finally {
       setIsActionLoading(false);
       setDeleteConfirmState(null);
@@ -779,63 +799,100 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
    */
   const handleBlockCustomer = async (customer: CustomerUser, reason = 'Bị quản trị viên chặn') => {
     setIsActionLoading(true);
+    const cleanPhone = normalizeVietnamesePhone(customer.phone) || customer.phone.trim().replace(/[\s.-]/g, '');
+    const cleanEmail = customer.email?.trim().toLowerCase();
+    const nowStr = new Date().toISOString();
+
     try {
-      const nowStr = new Date().toISOString();
-
-      // 1. Update customer doc
-      await updateDoc(doc(db, 'customers', customer.phone), {
-        isBlocked: true,
-        blockedAt: nowStr,
-        blockedReason: reason,
-      });
-
-      // 2. Write to blocked_identifiers collection
-      await setDoc(doc(db, 'blocked_identifiers', customer.phone), {
-        phone: customer.phone,
-        email: customer.email || '',
-        name: customer.name,
-        blockedAt: nowStr,
-        reason,
-      });
-
-      if (customer.email) {
-        await setDoc(
-          doc(db, 'blocked_identifiers', encodeURIComponent(customer.email.toLowerCase())),
-          {
-            phone: customer.phone,
-            email: customer.email.toLowerCase(),
-            name: customer.name,
-            blockedAt: nowStr,
-            reason,
-          }
-        );
-      }
-
-      // 3. Update local caches & kick session if active
-      addLocalBlockedCache(customer.phone, customer.email);
-      updateCustomerStatusInGoogleSheet(customer.phone, 'Bị khóa').catch(() => {});
-      window.dispatchEvent(
-        new CustomEvent('tingo-customer-session-cleared', {
-          detail: { phone: customer.phone, email: customer.email },
-        })
-      );
-
-      // 4. Update state
+      // 1. Update local state immediately
       setCustomers((prev) =>
         prev.map((c) =>
-          c.phone === customer.phone
+          normalizeVietnamesePhone(c.phone) === cleanPhone
             ? { ...c, isBlocked: true, blockedAt: nowStr, blockedReason: reason }
             : c
         )
       );
-      if (selectedCustomer?.phone === customer.phone) {
+      if (selectedCustomer && normalizeVietnamesePhone(selectedCustomer.phone) === cleanPhone) {
         setSelectedCustomer((prev) =>
           prev ? { ...prev, isBlocked: true, blockedAt: nowStr, blockedReason: reason } : null
         );
       }
+
+      // 2. Update local accounts cache
+      try {
+        const rawAccounts = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+        if (rawAccounts) {
+          const accs = JSON.parse(rawAccounts);
+          if (accs[cleanPhone]) {
+            accs[cleanPhone].isBlocked = true;
+            accs[cleanPhone].blockedAt = nowStr;
+            accs[cleanPhone].blockedReason = reason;
+          }
+          if (cleanEmail && accs[cleanEmail]) {
+            accs[cleanEmail].isBlocked = true;
+            accs[cleanEmail].blockedAt = nowStr;
+            accs[cleanEmail].blockedReason = reason;
+          }
+          localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(accs));
+        }
+      } catch {
+        // ignore
+      }
+
+      // 3. Add to blocked cache and clear customer active session
+      addLocalBlockedCache(cleanPhone, cleanEmail);
+      window.dispatchEvent(
+        new CustomEvent('tingo-customer-session-cleared', {
+          detail: { phone: cleanPhone, email: cleanEmail },
+        })
+      );
+
+      setActionToast({
+        type: 'success',
+        message: `Đã CHẶN tài khoản khách hàng (${customer.name} - ${cleanPhone})!`,
+      });
+      setTimeout(() => setActionToast(null), 3500);
+
+      // 4. Background non-blocking sync (Firestore & Google Sheets)
+      const backgroundTask = async () => {
+        try {
+          await setDoc(doc(db, 'customers', cleanPhone), {
+            isBlocked: true,
+            blockedAt: nowStr,
+            blockedReason: reason,
+          }, { merge: true }).catch(() => {});
+
+          await setDoc(doc(db, 'blocked_identifiers', cleanPhone), {
+            phone: cleanPhone,
+            email: cleanEmail || '',
+            name: customer.name,
+            blockedAt: nowStr,
+            reason,
+          }, { merge: true }).catch(() => {});
+
+          if (cleanEmail) {
+            await setDoc(
+              doc(db, 'blocked_identifiers', encodeURIComponent(cleanEmail)),
+              {
+                phone: cleanPhone,
+                email: cleanEmail,
+                name: customer.name,
+                blockedAt: nowStr,
+                reason,
+              },
+              { merge: true }
+            ).catch(() => {});
+          }
+
+          updateCustomerStatusInGoogleSheet(cleanPhone, 'Bị khóa').catch(() => {});
+        } catch (e) {
+          console.warn('Block customer background sync note:', e);
+        }
+      };
+
+      backgroundTask();
     } catch (err) {
       console.error('Failed to block customer', err);
-      alert('Không thể chặn khách hàng lúc này. Vui lòng thử lại.');
     } finally {
       setIsActionLoading(false);
     }
@@ -847,42 +904,79 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
    */
   const handleUnblockCustomer = async (customer: CustomerUser) => {
     setIsActionLoading(true);
+    const cleanPhone = normalizeVietnamesePhone(customer.phone) || customer.phone.trim().replace(/[\s.-]/g, '');
+    const cleanEmail = customer.email?.trim().toLowerCase();
+
     try {
-      // 1. Update customer doc
-      await updateDoc(doc(db, 'customers', customer.phone), {
-        isBlocked: false,
-        blockedAt: null,
-        blockedReason: null,
-      });
-
-      // 2. Delete from blocked_identifiers
-      await deleteDoc(doc(db, 'blocked_identifiers', customer.phone)).catch(() => {});
-      if (customer.email) {
-        await deleteDoc(
-          doc(db, 'blocked_identifiers', encodeURIComponent(customer.email.toLowerCase()))
-        ).catch(() => {});
-      }
-
-      // 3. Remove from local cache
-      removeLocalBlockedCache(customer.phone, customer.email);
-      updateCustomerStatusInGoogleSheet(customer.phone, 'Hoạt động').catch(() => {});
-
-      // 4. Update state
+      // 1. Update local state immediately
       setCustomers((prev) =>
         prev.map((c) =>
-          c.phone === customer.phone
+          normalizeVietnamesePhone(c.phone) === cleanPhone
             ? { ...c, isBlocked: false, blockedAt: undefined, blockedReason: undefined }
             : c
         )
       );
-      if (selectedCustomer?.phone === customer.phone) {
+      if (selectedCustomer && normalizeVietnamesePhone(selectedCustomer.phone) === cleanPhone) {
         setSelectedCustomer((prev) =>
           prev ? { ...prev, isBlocked: false, blockedAt: undefined, blockedReason: undefined } : null
         );
       }
+
+      // 2. Update local accounts cache
+      try {
+        const rawAccounts = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+        if (rawAccounts) {
+          const accs = JSON.parse(rawAccounts);
+          if (accs[cleanPhone]) {
+            accs[cleanPhone].isBlocked = false;
+            delete accs[cleanPhone].blockedAt;
+            delete accs[cleanPhone].blockedReason;
+          }
+          if (cleanEmail && accs[cleanEmail]) {
+            accs[cleanEmail].isBlocked = false;
+            delete accs[cleanEmail].blockedAt;
+            delete accs[cleanEmail].blockedReason;
+          }
+          localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(accs));
+        }
+      } catch {
+        // ignore
+      }
+
+      // 3. Remove from blocked cache
+      removeLocalBlockedCache(cleanPhone, cleanEmail);
+
+      setActionToast({
+        type: 'success',
+        message: `Đã MỞ CHẶN tài khoản (${customer.name} - ${cleanPhone}) thành công!`,
+      });
+      setTimeout(() => setActionToast(null), 3500);
+
+      // 4. Background non-blocking sync (Firestore & Google Sheets)
+      const backgroundTask = async () => {
+        try {
+          await setDoc(doc(db, 'customers', cleanPhone), {
+            isBlocked: false,
+            blockedAt: null,
+            blockedReason: null,
+          }, { merge: true }).catch(() => {});
+
+          await deleteDoc(doc(db, 'blocked_identifiers', cleanPhone)).catch(() => {});
+          if (cleanEmail) {
+            await deleteDoc(
+              doc(db, 'blocked_identifiers', encodeURIComponent(cleanEmail))
+            ).catch(() => {});
+          }
+
+          updateCustomerStatusInGoogleSheet(cleanPhone, 'Hoạt động').catch(() => {});
+        } catch (e) {
+          console.warn('Unblock customer background sync note:', e);
+        }
+      };
+
+      backgroundTask();
     } catch (err) {
       console.error('Failed to unblock customer', err);
-      alert('Không thể mở chặn khách hàng lúc này. Vui lòng thử lại.');
     } finally {
       setIsActionLoading(false);
     }
@@ -902,54 +996,67 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
     }
 
     setIsActionLoading(true);
+    const nowStr = new Date().toISOString();
+    const phonesToBlock = [...selectedCustomerPhones].map((p) => normalizeVietnamesePhone(p) || p);
+
     try {
-      const batch = writeBatch(db);
-      const nowStr = new Date().toISOString();
-
-      const targets = customers.filter((c) => selectedCustomerPhones.includes(c.phone));
-      for (const cus of targets) {
-        batch.update(doc(db, 'customers', cus.phone), {
-          isBlocked: true,
-          blockedAt: nowStr,
-          blockedReason: 'Chặn hàng loạt bởi Quản trị viên',
-        });
-        batch.set(doc(db, 'blocked_identifiers', cus.phone), {
-          phone: cus.phone,
-          email: cus.email || '',
-          name: cus.name,
-          blockedAt: nowStr,
-          reason: 'Chặn hàng loạt bởi Quản trị viên',
-        });
-        if (cus.email) {
-          batch.set(doc(db, 'blocked_identifiers', encodeURIComponent(cus.email.toLowerCase())), {
-            phone: cus.phone,
-            email: cus.email.toLowerCase(),
-            name: cus.name,
-            blockedAt: nowStr,
-            reason: 'Chặn hàng loạt bởi Quản trị viên',
-          });
-        }
-        addLocalBlockedCache(cus.phone, cus.email);
-        window.dispatchEvent(
-          new CustomEvent('tingo-customer-session-cleared', {
-            detail: { phone: cus.phone, email: cus.email },
-          })
-        );
-      }
-
-      await batch.commit();
-
+      // 1. Update UI state immediately
       setCustomers((prev) =>
         prev.map((c) =>
-          selectedCustomerPhones.includes(c.phone)
+          phonesToBlock.includes(normalizeVietnamesePhone(c.phone) || c.phone)
             ? { ...c, isBlocked: true, blockedAt: nowStr, blockedReason: 'Chặn hàng loạt' }
             : c
         )
       );
+      if (selectedCustomer && phonesToBlock.includes(normalizeVietnamesePhone(selectedCustomer.phone) || selectedCustomer.phone)) {
+        setSelectedCustomer((prev) =>
+          prev ? { ...prev, isBlocked: true, blockedAt: nowStr, blockedReason: 'Chặn hàng loạt' } : null
+        );
+      }
+
+      // 2. Update local caches
+      try {
+        const rawAccounts = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+        if (rawAccounts) {
+          const accs = JSON.parse(rawAccounts);
+          phonesToBlock.forEach((p) => {
+            if (accs[p]) {
+              accs[p].isBlocked = true;
+              accs[p].blockedAt = nowStr;
+            }
+          });
+          localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(accs));
+        }
+      } catch {
+        // ignore
+      }
+
+      phonesToBlock.forEach((p) => {
+        addLocalBlockedCache(p);
+        window.dispatchEvent(
+          new CustomEvent('tingo-customer-session-cleared', {
+            detail: { phone: p },
+          })
+        );
+      });
+
       setSelectedCustomerPhones([]);
+      setActionToast({
+        type: 'success',
+        message: `Đã chặn ${phonesToBlock.length} tài khoản đã chọn!`,
+      });
+      setTimeout(() => setActionToast(null), 3500);
+
+      // 3. Background batch update
+      const targets = customers.filter((c) => phonesToBlock.includes(normalizeVietnamesePhone(c.phone) || c.phone));
+      targets.forEach((cus) => {
+        const cleanPhone = normalizeVietnamesePhone(cus.phone) || cus.phone;
+        setDoc(doc(db, 'customers', cleanPhone), { isBlocked: true, blockedAt: nowStr }, { merge: true }).catch(() => {});
+        setDoc(doc(db, 'blocked_identifiers', cleanPhone), { phone: cleanPhone, blockedAt: nowStr }, { merge: true }).catch(() => {});
+        updateCustomerStatusInGoogleSheet(cleanPhone, 'Bị khóa').catch(() => {});
+      });
     } catch (err) {
       console.error('Bulk block error', err);
-      alert('Lỗi khi chặn hàng loạt khách hàng.');
     } finally {
       setIsActionLoading(false);
     }
@@ -966,36 +1073,62 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
     }
 
     setIsActionLoading(true);
+    const phonesToUnblock = [...selectedCustomerPhones].map((p) => normalizeVietnamesePhone(p) || p);
+
     try {
-      const batch = writeBatch(db);
-      const targets = customers.filter((c) => selectedCustomerPhones.includes(c.phone));
-
-      for (const cus of targets) {
-        batch.update(doc(db, 'customers', cus.phone), {
-          isBlocked: false,
-          blockedAt: null,
-          blockedReason: null,
-        });
-        batch.delete(doc(db, 'blocked_identifiers', cus.phone));
-        if (cus.email) {
-          batch.delete(doc(db, 'blocked_identifiers', encodeURIComponent(cus.email.toLowerCase())));
-        }
-        removeLocalBlockedCache(cus.phone, cus.email);
-      }
-
-      await batch.commit();
-
+      // 1. Update UI state immediately
       setCustomers((prev) =>
         prev.map((c) =>
-          selectedCustomerPhones.includes(c.phone)
+          phonesToUnblock.includes(normalizeVietnamesePhone(c.phone) || c.phone)
             ? { ...c, isBlocked: false, blockedAt: undefined, blockedReason: undefined }
             : c
         )
       );
+      if (selectedCustomer && phonesToUnblock.includes(normalizeVietnamesePhone(selectedCustomer.phone) || selectedCustomer.phone)) {
+        setSelectedCustomer((prev) =>
+          prev ? { ...prev, isBlocked: false, blockedAt: undefined, blockedReason: undefined } : null
+        );
+      }
+
+      // 2. Update local caches
+      try {
+        const rawAccounts = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+        if (rawAccounts) {
+          const accs = JSON.parse(rawAccounts);
+          phonesToUnblock.forEach((p) => {
+            if (accs[p]) {
+              accs[p].isBlocked = false;
+              delete accs[p].blockedAt;
+              delete accs[p].blockedReason;
+            }
+          });
+          localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(accs));
+        }
+      } catch {
+        // ignore
+      }
+
+      phonesToUnblock.forEach((p) => {
+        removeLocalBlockedCache(p);
+      });
+
       setSelectedCustomerPhones([]);
+      setActionToast({
+        type: 'success',
+        message: `Đã mở chặn ${phonesToUnblock.length} tài khoản đã chọn!`,
+      });
+      setTimeout(() => setActionToast(null), 3500);
+
+      // 3. Background batch update
+      const targets = customers.filter((c) => phonesToUnblock.includes(normalizeVietnamesePhone(c.phone) || c.phone));
+      targets.forEach((cus) => {
+        const cleanPhone = normalizeVietnamesePhone(cus.phone) || cus.phone;
+        setDoc(doc(db, 'customers', cleanPhone), { isBlocked: false, blockedAt: null, blockedReason: null }, { merge: true }).catch(() => {});
+        deleteDoc(doc(db, 'blocked_identifiers', cleanPhone)).catch(() => {});
+        updateCustomerStatusInGoogleSheet(cleanPhone, 'Hoạt động').catch(() => {});
+      });
     } catch (err) {
       console.error('Bulk unblock error', err);
-      alert('Lỗi khi mở chặn hàng loạt khách hàng.');
     } finally {
       setIsActionLoading(false);
     }
@@ -1004,26 +1137,58 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
   const handleBulkAddVouchers = async (countDelta: number) => {
     if (selectedCustomerPhones.length === 0) return;
     setIsActionLoading(true);
-    try {
-      const batch = writeBatch(db);
-      const targets = customers.filter((c) => selectedCustomerPhones.includes(c.phone));
+    const phones = [...selectedCustomerPhones].map((p) => normalizeVietnamesePhone(p) || p);
 
-      for (const cus of targets) {
-        const newCount = Math.max(0, (cus.freeshipVouchers || 0) + countDelta);
-        batch.update(doc(db, 'customers', cus.phone), {
-          freeshipVouchers: newCount,
-        });
+    try {
+      // 1. Update UI state immediately
+      setCustomers((prev) =>
+        prev.map((c) => {
+          const clean = normalizeVietnamesePhone(c.phone) || c.phone;
+          if (phones.includes(clean)) {
+            const newCount = Math.max(0, (c.freeshipVouchers || 0) + countDelta);
+            return { ...c, freeshipVouchers: newCount };
+          }
+          return c;
+        })
+      );
+      if (selectedCustomer) {
+        const selClean = normalizeVietnamesePhone(selectedCustomer.phone) || selectedCustomer.phone;
+        if (phones.includes(selClean)) {
+          setSelectedCustomer((prev) =>
+            prev ? { ...prev, freeshipVouchers: Math.max(0, (prev.freeshipVouchers || 0) + countDelta) } : null
+          );
+        }
       }
 
-      await batch.commit();
+      // 2. Update local accounts cache
+      try {
+        const rawAccounts = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+        if (rawAccounts) {
+          const accs = JSON.parse(rawAccounts);
+          phones.forEach((p) => {
+            if (accs[p]) {
+              accs[p].freeshipVouchers = Math.max(0, (accs[p].freeshipVouchers || 0) + countDelta);
+            }
+          });
+          localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(accs));
+        }
+      } catch {
+        // ignore
+      }
 
-      setCustomers((prev) =>
-        prev.map((c) =>
-          selectedCustomerPhones.includes(c.phone)
-            ? { ...c, freeshipVouchers: Math.max(0, (c.freeshipVouchers || 0) + countDelta) }
-            : c
-        )
-      );
+      setActionToast({
+        type: 'success',
+        message: `Đã cộng ${countDelta > 0 ? `+${countDelta}` : countDelta} Freeship cho ${phones.length} tài khoản!`,
+      });
+      setTimeout(() => setActionToast(null), 3500);
+
+      // 3. Background Firestore update
+      const targets = customers.filter((c) => phones.includes(normalizeVietnamesePhone(c.phone) || c.phone));
+      targets.forEach((cus) => {
+        const cleanPhone = normalizeVietnamesePhone(cus.phone) || cus.phone;
+        const newCount = Math.max(0, (cus.freeshipVouchers || 0) + countDelta);
+        setDoc(doc(db, 'customers', cleanPhone), { freeshipVouchers: newCount }, { merge: true }).catch(() => {});
+      });
     } catch (err) {
       console.error('Bulk voucher error', err);
     } finally {
@@ -1047,20 +1212,45 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
   };
 
   const handleAddVouchers = async (customerPhone: string, countDelta: number) => {
-    const target = customers.find((c) => c.phone === customerPhone);
+    const cleanPhone = normalizeVietnamesePhone(customerPhone) || customerPhone.trim().replace(/[\s.-]/g, '');
+    const target = customers.find((c) => (normalizeVietnamesePhone(c.phone) || c.phone) === cleanPhone);
     if (!target) return;
-    const newCount = Math.max(0, target.freeshipVouchers + countDelta);
+    const newCount = Math.max(0, (target.freeshipVouchers || 0) + countDelta);
 
     try {
-      await updateDoc(doc(db, 'customers', customerPhone), {
-        freeshipVouchers: newCount,
-      });
+      // 1. Update UI state immediately
       setCustomers((prev) =>
-        prev.map((c) => (c.phone === customerPhone ? { ...c, freeshipVouchers: newCount } : c))
+        prev.map((c) => ((normalizeVietnamesePhone(c.phone) || c.phone) === cleanPhone ? { ...c, freeshipVouchers: newCount } : c))
       );
-      if (selectedCustomer && selectedCustomer.phone === customerPhone) {
+      if (selectedCustomer && (normalizeVietnamesePhone(selectedCustomer.phone) || selectedCustomer.phone) === cleanPhone) {
         setSelectedCustomer((prev) => (prev ? { ...prev, freeshipVouchers: newCount } : null));
       }
+
+      // 2. Update LocalStorage cache immediately
+      try {
+        const rawAccounts = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+        if (rawAccounts) {
+          const accs = JSON.parse(rawAccounts);
+          if (accs[cleanPhone]) {
+            accs[cleanPhone].freeshipVouchers = newCount;
+          }
+          if (target.email && accs[target.email.toLowerCase()]) {
+            accs[target.email.toLowerCase()].freeshipVouchers = newCount;
+          }
+          localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(accs));
+        }
+      } catch {
+        // ignore
+      }
+
+      setActionToast({
+        type: 'success',
+        message: `Đã cập nhật ví Freeship của ${target.name}: ${newCount} mã`,
+      });
+      setTimeout(() => setActionToast(null), 3000);
+
+      // 3. Background update Firestore
+      setDoc(doc(db, 'customers', cleanPhone), { freeshipVouchers: newCount }, { merge: true }).catch(() => {});
     } catch (err) {
       console.warn('Update customer voucher error:', err);
     }
@@ -1068,16 +1258,38 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
 
   const handleSaveCustomerProfile = async () => {
     if (!selectedCustomer) return;
+    const cleanPhone = normalizeVietnamesePhone(selectedCustomer.phone) || selectedCustomer.phone;
+    const updated = { ...selectedCustomer, ...editCustomerForm, phone: cleanPhone };
+
     try {
-      await updateDoc(doc(db, 'customers', selectedCustomer.phone), editCustomerForm);
-      const updated = { ...selectedCustomer, ...editCustomerForm };
+      // 1. Update UI state immediately
       setSelectedCustomer(updated);
       setCustomers((prev) =>
-        prev.map((c) => (c.phone === selectedCustomer.phone ? updated : c))
+        prev.map((c) => ((normalizeVietnamesePhone(c.phone) || c.phone) === cleanPhone ? updated : c))
       );
-      // Synchronize update to Google Sheet
-      appendCustomerToGoogleSheet(updated).catch(() => {});
       setIsCustomerModalEditing(false);
+
+      // 2. Update LocalStorage
+      try {
+        const rawAccounts = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+        if (rawAccounts) {
+          const accs = JSON.parse(rawAccounts);
+          accs[cleanPhone] = { ...accs[cleanPhone], ...updated };
+          localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(accs));
+        }
+      } catch {
+        // ignore
+      }
+
+      setActionToast({
+        type: 'success',
+        message: `Đã lưu hồ sơ khách hàng ${updated.name}!`,
+      });
+      setTimeout(() => setActionToast(null), 3000);
+
+      // 3. Background Firestore & Google Sheet sync
+      setDoc(doc(db, 'customers', cleanPhone), sanitizeFirestoreData(updated), { merge: true }).catch(() => {});
+      appendCustomerToGoogleSheet(updated).catch(() => {});
     } catch (err) {
       console.error('Failed to save customer', err);
     }

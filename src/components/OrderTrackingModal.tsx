@@ -263,25 +263,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
         timeline: updatedTimeline,
       };
 
-      // 1. Update in Firestore
-      try {
-        const payload = sanitizeFirestoreData({
-          status: 'cancelled',
-          cancelledAt: isoString,
-          cancelledBy: 'customer',
-          cancelReason: finalReason,
-          timeline: updatedTimeline,
-        });
-        await updateDoc(doc(db, 'orders', target.id), payload);
-      } catch (err) {
-        console.warn('Firestore cancel order update warning:', err);
-        // Fallback setDoc
-        await setDoc(doc(db, 'orders', target.id), sanitizeFirestoreData(updatedOrder), {
-          merge: true,
-        });
-      }
-
-      // 2. Update Local Storage cache
+      // 1. Immediate local storage update
       try {
         const raw = localStorage.getItem('tingo_orders_storage');
         if (raw) {
@@ -293,7 +275,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
         // ignore
       }
 
-      // 3. Refund 1 Freeship voucher if this order used it
+      // 2. Refund Freeship voucher immediately if used
       if (
         target.couponCode === 'FREESHIP' ||
         target.discountAmount === 20000 ||
@@ -302,25 +284,7 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
         refundFreeshipVoucher(1);
       }
 
-      // 4. Send Telegram Bot notification to Admin
-      try {
-        await notifyCancelOrder(updatedOrder, finalReason, 'customer');
-      } catch (e) {
-        console.warn('Telegram cancel notification note:', e);
-      }
-
-      // 4b. Sync cancellation status immediately to Google Sheets Webhook
-      try {
-        appendOrderToGoogleSheet(updatedOrder).catch(() => {});
-        sendToGoogleSheetWebhook({
-          type: 'order',
-          data: updatedOrder,
-        }).catch(() => {});
-      } catch (sheetErr) {
-        console.warn('Google Sheets cancel sync note:', sheetErr);
-      }
-
-      // 5. Update local state
+      // 3. Immediate UI update
       if (searchedOrder && searchedOrder.id === target.id) {
         setSearchedOrder(updatedOrder);
       }
@@ -331,8 +295,53 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
       setIsCancelModalOpen(false);
       setOrderToCancel(null);
       setCancelSuccessMsg(
-        `Đã HỦY ĐƠN HÀNG #${target.id} thành công! Hệ thống đã đồng bộ trạng thái tới Admin và tự động hoàn lại voucher Freeship (nếu có) vào ví của bạn.`
+        `Đã HỦY ĐƠN HÀNG #${target.id} thành công! Hệ thống đã tự động hoàn lại voucher Freeship (nếu có) vào ví của bạn.`
       );
+
+      // 4. Background non-blocking network sync (Firestore, Google Sheets, Telegram)
+      const syncTask = async () => {
+        // 4a. Update in Firestore with safe timeout
+        try {
+          const payload = sanitizeFirestoreData({
+            status: 'cancelled',
+            cancelledAt: isoString,
+            cancelledBy: 'customer',
+            cancelReason: finalReason,
+            timeline: updatedTimeline,
+          });
+          const updatePromise = updateDoc(doc(db, 'orders', target.id), payload).catch(async () => {
+            await setDoc(doc(db, 'orders', target.id), sanitizeFirestoreData(updatedOrder), {
+              merge: true,
+            });
+          });
+          await Promise.race([
+            updatePromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore timeout')), 2500)),
+          ]).catch(() => {});
+        } catch (err) {
+          console.warn('Firestore cancel order update warning:', err);
+        }
+
+        // 4b. Sync to Google Sheets Webhook
+        try {
+          appendOrderToGoogleSheet(updatedOrder).catch(() => {});
+          sendToGoogleSheetWebhook({
+            type: 'order',
+            data: updatedOrder,
+          }).catch(() => {});
+        } catch (sheetErr) {
+          console.warn('Google Sheets cancel sync note:', sheetErr);
+        }
+
+        // 4c. Send Telegram Bot notification
+        try {
+          notifyCancelOrder(updatedOrder, finalReason, 'customer').catch(() => {});
+        } catch (e) {
+          console.warn('Telegram cancel notification note:', e);
+        }
+      };
+
+      syncTask();
     } catch (err: any) {
       console.error('Cancel order error:', err);
       alert('Không thể hủy đơn hàng lúc này. Vui lòng liên hệ Hotline 1900 8888 để được hỗ trợ.');
