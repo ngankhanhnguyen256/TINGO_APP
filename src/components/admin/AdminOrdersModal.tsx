@@ -74,9 +74,12 @@ import { buildUpdatedFirestoreTimeline, getSynchronizedTimeline } from '../../ut
 import {
   updateCustomerStatusInGoogleSheet,
   syncAllExistingCustomers,
-  appendCustomerToGoogleSheet
+  appendCustomerToGoogleSheet,
+  appendOrderToGoogleSheet,
+  sendToGoogleSheetWebhook,
 } from '../../lib/googleSheetsService';
 import { normalizeVietnamesePhone } from '../../context/CustomerAuthContext';
+import { useVisualEditor } from '../../context/VisualEditorContext';
 
 const ACCOUNTS_CACHE_KEY = 'tingo_registered_customers_cache';
 const BLOCKED_CACHE_KEY = 'tingo_blocked_identifiers_cache';
@@ -96,6 +99,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
   defaultTab = 'orders',
   onOpenGoogleSheets,
 }) => {
+  const { isAdmin } = useVisualEditor();
   const [activeTab, setActiveTab] = useState<'orders' | 'customers' | 'telegram'>(defaultTab);
 
   // Orders State
@@ -394,7 +398,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
     }
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !isAdmin) return null;
 
   // Filter Orders
   const filteredOrders = orders.filter((ord) => {
@@ -483,6 +487,29 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
       );
       if (selectedOrder && selectedOrder.id === orderId) {
         setSelectedOrder(updatedOrder);
+      }
+
+      // Update LocalStorage
+      try {
+        const raw = localStorage.getItem('tingo_orders_storage');
+        if (raw) {
+          const list: Order[] = JSON.parse(raw);
+          const updatedList = list.map((o) => (o.id === orderId ? updatedOrder : o));
+          localStorage.setItem('tingo_orders_storage', JSON.stringify(updatedList));
+        }
+      } catch {
+        // ignore
+      }
+
+      // Sync status change directly to Google Sheets Webhook
+      try {
+        appendOrderToGoogleSheet(updatedOrder).catch(() => {});
+        sendToGoogleSheetWebhook({
+          type: 'order',
+          data: updatedOrder,
+        }).catch(() => {});
+      } catch (sheetErr) {
+        console.warn('Google Sheets status sync note:', sheetErr);
       }
 
       // If cancelled by admin, also notify telegram

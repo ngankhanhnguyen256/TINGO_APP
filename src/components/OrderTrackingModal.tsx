@@ -23,6 +23,7 @@ import { useCustomerAuth } from '../context/CustomerAuthContext';
 import { doc, updateDoc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { notifyCancelOrder } from '../lib/telegram';
+import { sendToGoogleSheetWebhook, appendOrderToGoogleSheet } from '../lib/googleSheetsService';
 import { formatVietnameseDateTime } from '../utils/dateFormatter';
 import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
 import { getSynchronizedTimeline } from '../utils/orderTimelineHelper';
@@ -308,6 +309,17 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
         console.warn('Telegram cancel notification note:', e);
       }
 
+      // 4b. Sync cancellation status immediately to Google Sheets Webhook
+      try {
+        appendOrderToGoogleSheet(updatedOrder).catch(() => {});
+        sendToGoogleSheetWebhook({
+          type: 'order',
+          data: updatedOrder,
+        }).catch(() => {});
+      } catch (sheetErr) {
+        console.warn('Google Sheets cancel sync note:', sheetErr);
+      }
+
       // 5. Update local state
       if (searchedOrder && searchedOrder.id === target.id) {
         setSearchedOrder(updatedOrder);
@@ -581,6 +593,9 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
                   )}
                   <p className="text-[11px] text-emerald-800 font-medium pt-1">
                     ✓ Các voucher ưu đãi và quyền lợi (nếu có) đã được hoàn lại vào tài khoản của bạn.
+                  </p>
+                  <p className="text-[11px] text-slate-500 pt-0.5">
+                    ℹ️ Đơn hàng đã hủy không thể thanh toán lại. Nếu quý khách muốn mua lại sản phẩm, vui lòng chọn món vào giỏ hàng và tiến hành đặt đơn hàng mới trên website (hệ thống sẽ tạo mã đơn hàng mới).
                   </p>
                 </div>
               </div>

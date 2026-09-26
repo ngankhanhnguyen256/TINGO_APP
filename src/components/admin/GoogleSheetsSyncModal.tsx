@@ -45,6 +45,7 @@ import {
   APPS_SCRIPT_TEMPLATE,
 } from '../../lib/googleSheetsService';
 import { Order, CustomerUser } from '../../types';
+import { useVisualEditor } from '../../context/VisualEditorContext';
 
 const ACCOUNTS_CACHE_KEY = 'tingo_registered_customers_cache';
 
@@ -61,6 +62,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   orders,
   customers: initialCustomers,
 }) => {
+  const { isAdmin } = useVisualEditor();
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncAction, setSyncAction] = useState<'push' | 'restore' | 'test' | null>(null);
   const [sheetUrl, setSheetUrl] = useState<string | null>(getSavedSheetUrl());
@@ -101,7 +103,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     }
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  if (!isOpen || !isAdmin) return null;
 
   const currentCustomers = getCustomerList();
 

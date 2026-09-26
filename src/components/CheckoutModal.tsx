@@ -27,7 +27,7 @@ import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { notifyNewOrder } from '../lib/telegram';
 import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
-import { appendOrderToGoogleSheet, isAutoSyncEnabled, queuePendingOrder, queuePendingFirestoreOrder } from '../lib/googleSheetsService';
+import { appendOrderToGoogleSheet, isAutoSyncEnabled, queuePendingOrder, queuePendingFirestoreOrder, sendToGoogleSheetWebhook } from '../lib/googleSheetsService';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -327,6 +327,10 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
 
         // Cập nhật thông tin khách hàng vào Firestore nếu có thể
         if (cleanPhone) {
+          const remainingVouchers = appliedCoupon === 'FREESHIP'
+            ? Math.max(0, (customer?.freeshipVouchers ?? 5) - 1)
+            : (customer?.freeshipVouchers ?? 5);
+
           const customerProfileData = sanitizeFirestoreData({
             id: `CUS-${cleanPhone}`,
             name: name.trim(),
@@ -335,6 +339,8 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             address: address.trim(),
             city: city,
             district: district,
+            freeshipVouchers: remainingVouchers,
+            isFirstOrder: false,
             lastOrderAt: isoString,
             lastOrderId: newOrder.id,
           });
@@ -346,11 +352,21 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             console.warn('Firestore customer profile write note:', fireCustErr);
           });
 
+          // Đồng bộ trực tiếp thông tin khách hàng & số lượng voucher còn lại lên Google Sheets Webhook
+          sendToGoogleSheetWebhook({
+            type: 'customer',
+            data: customerProfileData,
+          }).catch((sheetErr) => {
+            console.warn('Google Sheets customer update note:', sheetErr);
+          });
+
           // Cập nhật state khách hàng trong ứng dụng
           updateCustomerProfile({
             address: address.trim(),
             city: city,
             district: district,
+            freeshipVouchers: remainingVouchers,
+            isFirstOrder: false,
             lastOrderAt: isoString,
             lastOrderId: newOrder.id,
           });
