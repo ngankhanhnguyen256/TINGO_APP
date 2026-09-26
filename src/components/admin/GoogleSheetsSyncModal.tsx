@@ -34,6 +34,7 @@ import {
   bulkSyncOrdersToGoogleSheet,
   bulkSyncCustomersToGoogleSheet,
   reconcileAndSyncAll,
+  restoreAllFromGoogleSheetsToFirestore,
   isAutoSyncEnabled,
   setAutoSyncEnabled,
   getPendingSyncCounts,
@@ -365,48 +366,27 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     setSyncType('restore');
     setSyncStatusMsg({
       type: 'info',
-      text: 'Đang đọc dữ liệu từ Google Sheets để khôi phục bù vào Firebase Firestore...',
+      text: 'Đang kết nối Google Sheets để đọc toàn bộ danh sách Đơn Hàng & Khách Hàng và khôi phục vào Firebase Firestore...',
     });
 
     try {
-      const sheetCustomers = await fetchCustomersFromGoogleSheet();
-      const sheetOrders = await fetchOrdersFromGoogleSheet();
+      const res = await restoreAllFromGoogleSheetsToFirestore();
+      setPendingStats(getPendingSyncCounts());
 
-      let restoredCustCount = 0;
-      let restoredOrdCount = 0;
-
-      for (const sc of sheetCustomers) {
-        if (!sc.phone) continue;
-        const cleanPhone = sc.phone.replace(/[\s.-]/g, '');
-        try {
-          await setDoc(doc(db, 'customers', cleanPhone), sanitizeFirestoreData({
-            ...sc,
-            registeredAt: sc.createdAt || new Date().toISOString(),
-            lastLoginAt: sc.createdAt || new Date().toISOString(),
-          }), { merge: true });
-          restoredCustCount++;
-        } catch {
-          // ignore
-        }
+      if (res.success) {
+        setSyncStatusMsg({
+          type: 'success',
+          text: `Khôi phục dữ liệu từ Google Sheet vào Firebase thành công 100%!
+• Tổng dữ liệu tìm thấy trên Google Sheet: ${res.totalCustomersInSheet} Khách hàng | ${res.totalOrdersInSheet} Đơn hàng.
+• Đã khôi phục an toàn vào Firebase Firestore: ${res.customersRestored} Khách hàng | ${res.ordersRestored} Đơn hàng.
+Toàn bộ hệ thống website và trang quản trị đã được đồng bộ chuẩn xác!`,
+        });
+      } else {
+        setSyncStatusMsg({
+          type: 'error',
+          text: res.error || 'Lỗi khi đọc dữ liệu từ Google Sheet để khôi phục.',
+        });
       }
-
-      for (const so of sheetOrders) {
-        if (!so.id) continue;
-        try {
-          await setDoc(doc(db, 'orders', so.id), sanitizeFirestoreData(so), { merge: true });
-          restoredOrdCount++;
-        } catch {
-          // ignore
-        }
-      }
-
-      setSyncStatusMsg({
-        type: 'success',
-        text: `Khôi phục thành công từ Google Sheets sang Firebase!
-• Đã khôi phục ${restoredCustCount}/${sheetCustomers.length} Khách hàng vào Firestore
-• Đã khôi phục ${restoredOrdCount}/${sheetOrders.length} Đơn hàng vào Firestore.
-Dữ liệu trên Firebase đã đồng nhất với Google Sheets!`,
-      });
     } catch (err: any) {
       setSyncStatusMsg({
         type: 'error',
@@ -606,7 +586,7 @@ Dữ liệu trên Firebase đã đồng nhất với Google Sheets!`,
                   </button>
                 </div>
 
-                {/* 2. TWO WAY COMPREHENSIVE SYNC */}
+                {/* 2. TWO WAY COMPREHENSIVE SYNC & MASTER RECOVERY */}
                 <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-300 space-y-3">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -615,7 +595,7 @@ Dữ liệu trên Firebase đã đồng nhất với Google Sheets!`,
                       </div>
                       <div>
                         <div className="text-xs font-bold text-emerald-950">
-                          Đồng Bộ 2 Chiều Toàn Diện (Google Sheet làm Trung Tâm)
+                          Đồng Bộ 2 Chiều Toàn Diện (Google Sheet làm Trung Tâm Master)
                         </div>
                         <div className="text-[11px] text-emerald-700">
                           Đẩy đơn/khách mới lên Sheet VÀ quét dữ liệu từ Sheet khôi phục về Firebase
@@ -634,17 +614,30 @@ Dữ liệu trên Firebase đã đồng nhất với Google Sheets!`,
                       <RefreshCw className={`w-3.5 h-3.5 ${isSyncing && syncType === 'all' ? 'animate-spin' : ''}`} />
                       <span>{isSyncing && syncType === 'all' ? 'Đang thực thi đồng bộ...' : '⚡ Kích Hoạt Đồng Bộ 2 Chiều Ngay'}</span>
                     </button>
-
-                    <button
-                      type="button"
-                      onClick={handleRestoreFromSheetToFirebase}
-                      disabled={isSyncing}
-                      className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-white hover:bg-emerald-50 border border-emerald-300 text-emerald-800 text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50"
-                    >
-                      <Database className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>{isSyncing && syncType === 'restore' ? 'Đang khôi phục...' : '📥 Khôi phục từ GG Sheet qua Firebase'}</span>
-                    </button>
                   </div>
+                </div>
+
+                {/* 3. DEDICATED MASTER RECOVERY CARD */}
+                <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
+                      <Database className="w-4 h-4 text-amber-700" />
+                      <span>Khôi Phục Dữ Liệu Từ Google Sheet Vào Firebase</span>
+                      <span className="px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 text-[10px] font-bold">Chống Mất Quota</span>
+                    </div>
+                    <div className="text-[11px] text-amber-800">
+                      Khi Firebase có Quota trở lại vào ngày hôm sau, bấm nút này để hệ thống đọc toàn bộ dữ liệu từ Google Sheet (qua Webhook GET/API) và tự động ghi bù tất cả đơn hàng & tài khoản khách hàng bị thiếu vào Firebase Firestore.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleRestoreFromSheetToFirebase}
+                    disabled={isSyncing}
+                    className="shrink-0 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-md cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                  >
+                    <Database className={`w-3.5 h-3.5 ${isSyncing && syncType === 'restore' ? 'animate-bounce' : ''}`} />
+                    <span>{isSyncing && syncType === 'restore' ? 'Đang khôi phục bù...' : '📥 Khôi Phục Từ Google Sheet'}</span>
+                  </button>
                 </div>
 
                 {/* Sub Action Sync Buttons */}

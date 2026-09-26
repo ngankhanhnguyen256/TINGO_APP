@@ -281,7 +281,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       }
       markFirstOrderCompleted();
 
-      // 1. Save to local orders cache for instant rendering
+      // =========================================================================
+      // THỰC THI LUỒNG MASTER BACKUP CHỐNG MẤT ĐƠN KHI FIREBASE HẾT QUOTA:
+      // =========================================================================
+
+      // 0. Lưu tức thì vào bộ nhớ cục bộ LocalStorage (Hiển thị ngay cho khách & admin)
       try {
         const existingRaw = localStorage.getItem('tingo_orders_storage');
         const existingList: Order[] = existingRaw ? JSON.parse(existingRaw) : [];
@@ -293,15 +297,35 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         console.warn('Local order storage note:', e);
       }
 
-      // 2. Persist order to Firebase Firestore & update Customer record (Fire-and-forget background sync with fallback queue)
+      // BƯỚC 1: BẮN DỮ LIỆU NGAY LẬP TỨC VỀ GOOGLE SHEET WEBHOOK (MASTER BACKUP KHÔNG THỂ MẤT ĐƠN)
+      try {
+        await Promise.race([
+          appendOrderToGoogleSheet(newOrder),
+          new Promise((resolve) => setTimeout(resolve, 2000)),
+        ]);
+      } catch (sheetErr) {
+        console.warn('Google Sheets append notice:', sheetErr);
+        queuePendingOrder(newOrder);
+      }
+
+      // BƯỚC 2: BẮN THÔNG BÁO VỀ TELEGRAM BOT (ĐỘC LẬP HOÀN TOÀN VỚI FIREBASE)
+      try {
+        notifyNewOrder(newOrder).catch((tgErr) => {
+          console.warn('Telegram notification background note:', tgErr);
+        });
+      } catch (tgErr) {
+        console.warn('Telegram notification trigger note:', tgErr);
+      }
+
+      // BƯỚC 3: GHI DỮ LIỆU VÀO FIREBASE FIRESTORE (TRY...CATCH AN TOÀN, KHÔNG CHẶN ĐƠN NẾU QUOTA EXCEEDED)
       try {
         const cleanOrderPayload = sanitizeFirestoreData(newOrder);
-        setDoc(doc(db, 'orders', newOrder.id), cleanOrderPayload).catch((err) => {
-          console.warn('Firestore order sync warning:', err);
+        setDoc(doc(db, 'orders', newOrder.id), cleanOrderPayload).catch((fireErr) => {
+          console.warn('Firestore order write note (Quota or network):', fireErr);
           queuePendingFirestoreOrder(newOrder);
         });
 
-        // Also persist / update customer profile in Firestore & local state
+        // Cập nhật thông tin khách hàng vào Firestore nếu có thể
         if (cleanPhone) {
           const customerProfileData = sanitizeFirestoreData({
             id: `CUS-${cleanPhone}`,
@@ -318,11 +342,11 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             doc(db, 'customers', cleanPhone),
             customerProfileData,
             { merge: true }
-          ).catch((err) => {
-            console.warn('Firestore customer profile sync warning:', err);
+          ).catch((fireCustErr) => {
+            console.warn('Firestore customer profile write note:', fireCustErr);
           });
 
-          // Update customer auth state
+          // Cập nhật state khách hàng trong ứng dụng
           updateCustomerProfile({
             address: address.trim(),
             city: city,
@@ -331,39 +355,19 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
             lastOrderId: newOrder.id,
           });
         }
-      } catch (err) {
-        console.warn('Firestore order sync error:', err);
+      } catch (firestoreErr) {
+        console.warn('Firestore write error (handled safely):', firestoreErr);
         queuePendingFirestoreOrder(newOrder);
       }
 
-      // 3. Notify Telegram Bot in real-time in background
-      // 3. Telegram notification
-      try {
-        notifyNewOrder(newOrder).catch((err) => {
-          console.warn('Telegram new order alert warning:', err);
-        });
-      } catch (err) {
-        console.warn('Telegram new order alert trigger warning:', err);
-      }
-
-      // 4. Auto-append Order to Google Sheets (luôn lấy Google Sheets làm trung tâm)
-      try {
-        await Promise.race([
-          appendOrderToGoogleSheet(newOrder),
-          new Promise((resolve) => setTimeout(resolve, 1800)),
-        ]);
-      } catch (err) {
-        console.warn('Google Sheets trigger notice:', err);
-        queuePendingOrder(newOrder);
-      }
-
-      // Increment today's count in state
+      // Cập nhật số lượng đơn hôm nay
       setTodayOrdersCount((prev) => prev + 1);
 
+      // ĐÁNH DẤU THÀNH CÔNG CHO KHÁCH HÀNG 100%
       setCreatedOrder(newOrder);
       onOrderSuccess(newOrder);
 
-      // Trigger Celebration Confetti
+      // Bắn hiệu ứng pháo hoa chúc mừng
       try {
         confetti({
           particleCount: 80,

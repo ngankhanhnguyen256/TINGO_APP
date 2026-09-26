@@ -15,8 +15,8 @@ export interface TelegramConfig {
 const STORAGE_KEY = 'tingo_telegram_config';
 
 const DEFAULT_CONFIG: TelegramConfig = {
-  botToken: '',
-  chatId: '',
+  botToken: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_TELEGRAM_BOT_TOKEN) || '',
+  chatId: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_TELEGRAM_CHAT_ID) || '',
   enabledNewCustomer: true,
   enabledNewOrder: true,
   enabledCancelOrder: true,
@@ -38,7 +38,8 @@ export const escapeTelegramHtml = (str?: string | number | null): string => {
 };
 
 /**
- * Load Telegram settings from memory, Firestore, and/or LocalStorage
+ * Load Telegram settings from memory, Environment Variables, LocalStorage, and/or Firestore
+ * Prioritizes Env Vars and LocalStorage first to ensure zero downtime when Firebase hits Quota limits.
  */
 export const getTelegramConfig = async (): Promise<TelegramConfig> => {
   // 1. Try in-memory cached config first if valid
@@ -46,14 +47,52 @@ export const getTelegramConfig = async (): Promise<TelegramConfig> => {
     return cachedConfig;
   }
 
-  // 2. Try Firestore first
+  // 2. Check Environment Variables (VITE_TELEGRAM_BOT_TOKEN & VITE_TELEGRAM_CHAT_ID)
+  const envToken = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_TELEGRAM_BOT_TOKEN : '';
+  const envChatId = typeof import.meta !== 'undefined' ? import.meta.env?.VITE_TELEGRAM_CHAT_ID : '';
+  if (envToken && envChatId) {
+    const config: TelegramConfig = {
+      ...DEFAULT_CONFIG,
+      botToken: envToken.trim(),
+      chatId: envChatId.trim(),
+    };
+    cachedConfig = config;
+    return config;
+  }
+
+  // 3. Try LocalStorage (instant, zero network latency)
   try {
-    const docSnap = await getDoc(doc(db, 'system_settings', 'telegram'));
-    if (docSnap.exists()) {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (parsed && (parsed.botToken || parsed.chatId)) {
+        const config: TelegramConfig = {
+          ...DEFAULT_CONFIG,
+          ...parsed,
+          botToken: (parsed.botToken || envToken || '').trim(),
+          chatId: (parsed.chatId || envChatId || '').trim(),
+        };
+        cachedConfig = config;
+        return config;
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  // 4. Fallback to Firestore with safety timeout (doesn't block if Firebase quota exceeded)
+  try {
+    const fetchDocPromise = getDoc(doc(db, 'system_settings', 'telegram'));
+    const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200));
+    const docSnap: any = await Promise.race([fetchDocPromise, timeoutPromise]);
+    
+    if (docSnap && docSnap.exists && docSnap.exists()) {
       const data = docSnap.data() as Partial<TelegramConfig>;
       const config: TelegramConfig = {
         ...DEFAULT_CONFIG,
         ...data,
+        botToken: (data.botToken || envToken || '').trim(),
+        chatId: (data.chatId || envChatId || '').trim(),
       };
       if (config.botToken && config.chatId) {
         cachedConfig = config;
@@ -66,25 +105,14 @@ export const getTelegramConfig = async (): Promise<TelegramConfig> => {
       }
     }
   } catch (err) {
-    console.warn('Firestore telegram config fetch note:', err);
+    console.warn('Firestore telegram config fetch note (using fallback):', err);
   }
 
-  // 3. Fallback to LocalStorage
-  try {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed && (parsed.botToken || parsed.chatId)) {
-        const config = { ...DEFAULT_CONFIG, ...parsed };
-        cachedConfig = config;
-        return config;
-      }
-    }
-  } catch {
-    // ignore
-  }
-
-  return DEFAULT_CONFIG;
+  return {
+    ...DEFAULT_CONFIG,
+    botToken: envToken || DEFAULT_CONFIG.botToken,
+    chatId: envChatId || DEFAULT_CONFIG.chatId,
+  };
 };
 
 /**

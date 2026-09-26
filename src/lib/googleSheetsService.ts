@@ -114,10 +114,14 @@ export const signInWithGoogle = async (): Promise<{ user: User; accessToken: str
 };
 
 export const getSavedSheetId = (): string | null => {
+  const envId = (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_GOOGLE_SHEET_ID || import.meta.env?.VITE_GOOGLE_SPREADSHEET_ID)) || '';
+  if (envId) return envId.trim();
   return localStorage.getItem(SHEET_ID_STORAGE_KEY);
 };
 
 export const getSavedSheetUrl = (): string | null => {
+  const envUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_GOOGLE_SHEET_URL) || '';
+  if (envUrl) return envUrl.trim();
   return localStorage.getItem(SHEET_URL_STORAGE_KEY);
 };
 
@@ -137,11 +141,20 @@ export const setSavedSheetInfo = (id: string, url: string) => {
 
 export const getSavedWebhookUrl = (): string | null => {
   if (inMemoryWebhookUrl) return inMemoryWebhookUrl;
+
+  // 1. Prioritize Environment Variables (VITE_GOOGLE_SHEET_WEBHOOK_URL or VITE_GOOGLE_SHEETS_WEBHOOK_URL)
+  const envWebhook = (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_GOOGLE_SHEET_WEBHOOK_URL || import.meta.env?.VITE_GOOGLE_SHEETS_WEBHOOK_URL)) || '';
+  if (envWebhook && envWebhook.trim().startsWith('http')) {
+    inMemoryWebhookUrl = envWebhook.trim();
+    return inMemoryWebhookUrl;
+  }
+
+  // 2. Read from LocalStorage (instant cache)
   try {
     const stored = localStorage.getItem(WEBHOOK_URL_STORAGE_KEY);
-    if (stored) {
-      inMemoryWebhookUrl = stored;
-      return stored;
+    if (stored && stored.trim().startsWith('http')) {
+      inMemoryWebhookUrl = stored.trim();
+      return inMemoryWebhookUrl;
     }
   } catch {
     // ignore
@@ -1368,3 +1381,110 @@ export const reconcileAndSyncAll = async (
     };
   }
 };
+
+/**
+ * Dedicated Master Recovery: Pulls all records from Google Sheet and restores missing customers & orders into Firebase Firestore
+ */
+export const restoreAllFromGoogleSheetsToFirestore = async (token?: string): Promise<{
+  success: boolean;
+  customersRestored: number;
+  ordersRestored: number;
+  totalCustomersInSheet: number;
+  totalOrdersInSheet: number;
+  error?: string;
+}> => {
+  const activeToken = token || getGoogleAccessToken();
+  const webhookUrl = getSavedWebhookUrl();
+
+  if (!activeToken && !webhookUrl) {
+    return {
+      success: false,
+      customersRestored: 0,
+      ordersRestored: 0,
+      totalCustomersInSheet: 0,
+      totalOrdersInSheet: 0,
+      error: 'Chưa cấu hình Google Webhook hoặc chưa đăng nhập tài khoản Google',
+    };
+  }
+
+  try {
+    const sheetCustomers = await fetchCustomersFromGoogleSheet(activeToken || undefined);
+    const sheetOrders = await fetchOrdersFromGoogleSheet(activeToken || undefined);
+
+    let customersRestored = 0;
+    let ordersRestored = 0;
+
+    // 1. Restore Customers into Firestore and Local Cache
+    for (const sc of sheetCustomers) {
+      if (!sc.phone) continue;
+      const cleanPhone = sc.phone.replace(/[\s.-]/g, '');
+      try {
+        const custPayload = sanitizeFirestoreData({
+          ...sc,
+          id: sc.id || `CUS-${cleanPhone}`,
+          phone: cleanPhone,
+          registeredAt: sc.createdAt || new Date().toISOString(),
+          lastLoginAt: sc.createdAt || new Date().toISOString(),
+          isBlocked: !!sc.isBlocked,
+        });
+
+        await setDoc(doc(db, 'customers', cleanPhone), custPayload, { merge: true });
+        customersRestored++;
+
+        // Update local accounts cache
+        try {
+          const raw = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+          const map = raw ? JSON.parse(raw) : {};
+          map[cleanPhone] = { ...map[cleanPhone], ...custPayload };
+          localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(map));
+        } catch {
+          // ignore
+        }
+      } catch (err) {
+        console.warn(`Could not write customer ${cleanPhone} to Firestore:`, err);
+      }
+    }
+
+    // 2. Restore Orders into Firestore and Local Cache
+    for (const so of sheetOrders) {
+      if (!so.id) continue;
+      try {
+        const orderPayload = sanitizeFirestoreData(so);
+        await setDoc(doc(db, 'orders', so.id), orderPayload, { merge: true });
+        ordersRestored++;
+
+        // Update local orders cache
+        try {
+          const rawOrders = localStorage.getItem('tingo_orders_storage');
+          const list: Order[] = rawOrders ? JSON.parse(rawOrders) : [];
+          if (!list.some((o) => o.id === so.id)) {
+            list.unshift(so as Order);
+            localStorage.setItem('tingo_orders_storage', JSON.stringify(list));
+          }
+        } catch {
+          // ignore
+        }
+      } catch (err) {
+        console.warn(`Could not write order ${so.id} to Firestore:`, err);
+      }
+    }
+
+    return {
+      success: true,
+      customersRestored,
+      ordersRestored,
+      totalCustomersInSheet: sheetCustomers.length,
+      totalOrdersInSheet: sheetOrders.length,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      customersRestored: 0,
+      ordersRestored: 0,
+      totalCustomersInSheet: 0,
+      totalOrdersInSheet: 0,
+      error: err.message || 'Lỗi khi khôi phục dữ liệu từ Google Sheet',
+    };
+  }
+};
+

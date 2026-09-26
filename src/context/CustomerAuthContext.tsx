@@ -423,39 +423,39 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
       // ignore
     }
 
-    // Save to Local Accounts Cache immediately (100% fail-proof)
+    // 0. Lưu vào bộ nhớ cục bộ Local Accounts Cache ngay lập tức (100% không mất dữ liệu)
     saveLocalAccount(userWithPass);
 
-    // Save to Firestore in background (non-blocking) with fallback queue
+    // BƯỚC 1: BẮN DỮ LIỆU NGAY LẬP TỨC VỀ GOOGLE SHEET WEBHOOK (MASTER BACKUP)
     try {
-      const customerDocRef = doc(db, 'customers', cleanPhone);
-      setDoc(customerDocRef, sanitizeFirestoreData(userWithPass), { merge: true }).catch((err) => {
-        console.warn('Firestore customer registration sync note:', err);
-        queuePendingFirestoreCustomer(newUser);
-      });
-    } catch (err) {
-      console.warn('Firestore customer registration trigger warning:', err);
-      queuePendingFirestoreCustomer(newUser);
-    }
-
-    // Send Telegram Notification in real-time
-    try {
-      notifyNewRegistration(newUser).catch((err) => {
-        console.warn('Telegram registration alert note:', err);
-      });
-    } catch (err) {
-      console.warn('Telegram registration alert trigger note:', err);
-    }
-
-    // Auto-append Customer to Google Sheets (luôn lấy Google Sheet làm trung tâm)
-    try {
-      appendCustomerToGoogleSheet(newUser).catch((err) => {
-        console.warn('Google Sheets customer sync notice:', err);
+      appendCustomerToGoogleSheet(newUser).catch((sheetErr) => {
+        console.warn('Google Sheets customer sync notice:', sheetErr);
         queuePendingCustomer(newUser);
       });
-    } catch (err) {
-      console.warn('Google Sheets customer sync trigger note:', err);
+    } catch (sheetErr) {
+      console.warn('Google Sheets customer sync trigger note:', sheetErr);
       queuePendingCustomer(newUser);
+    }
+
+    // BƯỚC 2: BẮN THÔNG BÁO VỀ TELEGRAM BOT (ĐỘC LẬP VỚI FIREBASE)
+    try {
+      notifyNewRegistration(newUser).catch((tgErr) => {
+        console.warn('Telegram registration alert note:', tgErr);
+      });
+    } catch (tgErr) {
+      console.warn('Telegram registration alert trigger note:', tgErr);
+    }
+
+    // BƯỚC 3: GHI DỮ LIỆU VÀO FIREBASE FIRESTORE (TRY...CATCH AN TOÀN, KHÔNG CHẶN ĐĂNG KÝ KHI HẾT QUOTA)
+    try {
+      const customerDocRef = doc(db, 'customers', cleanPhone);
+      setDoc(customerDocRef, sanitizeFirestoreData(userWithPass), { merge: true }).catch((fireErr) => {
+        console.warn('Firestore customer registration sync note (Quota/Offline):', fireErr);
+        queuePendingFirestoreCustomer(newUser);
+      });
+    } catch (firestoreErr) {
+      console.warn('Firestore customer registration trigger warning (Safe fallback):', firestoreErr);
+      queuePendingFirestoreCustomer(newUser);
     }
 
     // Broadcast customer registration across tabs and admin panels
