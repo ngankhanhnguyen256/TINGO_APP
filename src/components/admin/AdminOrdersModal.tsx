@@ -42,7 +42,8 @@ import {
   Eye,
   EyeOff,
   Radio,
-  CheckCircle2
+  CheckCircle2,
+  FileSpreadsheet,
 } from 'lucide-react';
 import {
   collection,
@@ -69,6 +70,11 @@ import {
 import { formatVietnameseDateTime } from '../../utils/dateFormatter';
 import { sanitizeFirestoreData } from '../../utils/sanitizeFirestore';
 import { buildUpdatedFirestoreTimeline, getSynchronizedTimeline } from '../../utils/orderTimelineHelper';
+import {
+  updateCustomerStatusInGoogleSheet,
+  syncAllExistingCustomers,
+  appendCustomerToGoogleSheet
+} from '../../lib/googleSheetsService';
 
 const ACCOUNTS_CACHE_KEY = 'tingo_registered_customers_cache';
 const BLOCKED_CACHE_KEY = 'tingo_blocked_identifiers_cache';
@@ -78,6 +84,7 @@ interface AdminOrdersModalProps {
   onClose: () => void;
   localOrders: Order[];
   defaultTab?: 'orders' | 'customers' | 'telegram';
+  onOpenGoogleSheets?: () => void;
 }
 
 export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
@@ -85,6 +92,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
   onClose,
   localOrders,
   defaultTab = 'orders',
+  onOpenGoogleSheets,
 }) => {
   const [activeTab, setActiveTab] = useState<'orders' | 'customers' | 'telegram'>(defaultTab);
 
@@ -477,6 +485,9 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
       // 3. Purge from local caches & sessions
       purgeLocalAccountData(cleanPhone, cleanEmail);
 
+      // 3b. Sync status 'Đã xóa' to Google Sheet
+      updateCustomerStatusInGoogleSheet(cleanPhone, 'Đã xóa').catch(() => {});
+
       // 4. Notify client session to immediately clear & show alert
       window.dispatchEvent(
         new CustomEvent('tingo-customer-session-cleared', {
@@ -530,6 +541,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
           await deleteDoc(doc(db, 'blocked_identifiers', encodeURIComponent(cleanEmail))).catch(() => {});
         }
         purgeLocalAccountData(cleanPhone, cleanEmail);
+        updateCustomerStatusInGoogleSheet(cleanPhone, 'Đã xóa').catch(() => {});
 
         window.dispatchEvent(
           new CustomEvent('tingo-customer-session-cleared', {
@@ -607,6 +619,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
 
       // 3. Update local caches & kick session if active
       addLocalBlockedCache(customer.phone, customer.email);
+      updateCustomerStatusInGoogleSheet(customer.phone, 'Bị khóa').catch(() => {});
       window.dispatchEvent(
         new CustomEvent('tingo-customer-session-cleared', {
           detail: { phone: customer.phone, email: customer.email },
@@ -658,6 +671,7 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
 
       // 3. Remove from local cache
       removeLocalBlockedCache(customer.phone, customer.email);
+      updateCustomerStatusInGoogleSheet(customer.phone, 'Hoạt động').catch(() => {});
 
       // 4. Update state
       setCustomers((prev) =>
@@ -867,6 +881,8 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
       setCustomers((prev) =>
         prev.map((c) => (c.phone === selectedCustomer.phone ? updated : c))
       );
+      // Synchronize update to Google Sheet
+      appendCustomerToGoogleSheet(updated).catch(() => {});
       setIsCustomerModalEditing(false);
     } catch (err) {
       console.error('Failed to save customer', err);
@@ -899,6 +915,8 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
       await setDoc(doc(db, 'customers', cleanPhone), newCus);
       setCustomers((prev) => [newCus, ...prev.filter((c) => c.phone !== cleanPhone)]);
       setSelectedCustomer(newCus);
+      // Synchronize immediately to Google Sheet
+      appendCustomerToGoogleSheet(newCus).catch(() => {});
       setIsNewCustomerModalOpen(false);
       setNewCustomerForm({
         name: '',
@@ -1097,15 +1115,29 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
             </button>
           </div>
 
-          {activeTab === 'customers' && (
-            <button
-              onClick={() => setIsNewCustomerModalOpen(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#008764] hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-all cursor-pointer mb-1"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Thêm Khách Hàng</span>
-            </button>
-          )}
+          <div className="flex items-center gap-2 mb-1">
+            {onOpenGoogleSheets && (
+              <button
+                type="button"
+                onClick={onOpenGoogleSheets}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-600 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
+                title="Đồng bộ 2 chiều dữ liệu Khách hàng & Đơn hàng với Google Sheets"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-teal-200" />
+                <span>Google Sheets & Khôi Phục</span>
+              </button>
+            )}
+
+            {activeTab === 'customers' && (
+              <button
+                onClick={() => setIsNewCustomerModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#008764] hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition-all cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Thêm Khách Hàng</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* ======================================================== */}

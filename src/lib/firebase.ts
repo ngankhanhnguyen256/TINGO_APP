@@ -1,15 +1,21 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getFirestore } from 'firebase/firestore';
+import { initializeFirestore, getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 
-// If a specific databaseId was provisioned, use it
 const cfg = firebaseConfig as any;
-export const db = cfg.firestoreDatabaseId && cfg.firestoreDatabaseId !== '(default)'
-  ? getFirestore(app, cfg.firestoreDatabaseId)
-  : getFirestore(app);
+const databaseId = cfg.firestoreDatabaseId && cfg.firestoreDatabaseId !== '(default)'
+  ? cfg.firestoreDatabaseId
+  : undefined;
+
+// Force Long Polling to eliminate "Failed to get document because the client is offline" errors in iframe and web environments
+export const db = !getApps().length || !(app as any)._isInitialized
+  ? initializeFirestore(app, {
+      experimentalForceLongPolling: true,
+    }, databaseId || '(default)')
+  : getFirestore(app, databaseId || '(default)');
 
 export const auth = getAuth(app);
 export default app;

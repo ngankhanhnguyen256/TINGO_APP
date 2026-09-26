@@ -41,6 +41,11 @@ import {
   clearCartStorage,
   fetchCustomerCloudCart,
 } from './utils/cartStorage';
+import {
+  getGoogleAccessToken,
+  reconcileAndSyncAll,
+  isAutoSyncEnabled,
+} from './lib/googleSheetsService';
 
 function MainApp() {
   const { config, isAdmin } = useVisualEditor();
@@ -140,6 +145,30 @@ function MainApp() {
       console.warn('Firestore subscription catch:', e);
     }
   }, []);
+
+  // Automatic Background Two-Way Sync Engine (reconciles Google Sheets and Firebase / Local queues)
+  useEffect(() => {
+    const runAutoSync = async () => {
+      const token = getGoogleAccessToken();
+      if (token && isAutoSyncEnabled()) {
+        try {
+          await reconcileAndSyncAll(orders);
+        } catch (e) {
+          // background quiet catch
+        }
+      }
+    };
+
+    // Initial sync check after 3s
+    const initTimer = setTimeout(runAutoSync, 3000);
+    // Recurring background sync every 60s
+    const interval = setInterval(runAutoSync, 60000);
+
+    return () => {
+      clearTimeout(initTimer);
+      clearInterval(interval);
+    };
+  }, [orders]);
 
   // ScrollSpy to update active nav tab
   useEffect(() => {
@@ -433,6 +462,7 @@ function MainApp() {
         isOpen={adminOrdersOpen}
         onClose={() => setAdminOrdersOpen(false)}
         localOrders={orders}
+        onOpenGoogleSheets={() => setGoogleSheetsModalOpen(true)}
       />
       <GoogleSheetsSyncModal
         isOpen={googleSheetsModalOpen}

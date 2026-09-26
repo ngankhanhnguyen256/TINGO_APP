@@ -27,7 +27,7 @@ import { doc, setDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { notifyNewOrder } from '../lib/telegram';
 import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
-import { appendOrderToGoogleSheet, isAutoSyncEnabled } from '../lib/googleSheetsService';
+import { appendOrderToGoogleSheet, isAutoSyncEnabled, queuePendingOrder, queuePendingFirestoreOrder } from '../lib/googleSheetsService';
 
 interface CheckoutModalProps {
   isOpen: boolean;
@@ -293,11 +293,12 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         console.warn('Local order storage note:', e);
       }
 
-      // 2. Persist order to Firebase Firestore & update Customer record (Fire-and-forget background sync)
+      // 2. Persist order to Firebase Firestore & update Customer record (Fire-and-forget background sync with fallback queue)
       try {
         const cleanOrderPayload = sanitizeFirestoreData(newOrder);
         setDoc(doc(db, 'orders', newOrder.id), cleanOrderPayload).catch((err) => {
           console.warn('Firestore order sync warning:', err);
+          queuePendingFirestoreOrder(newOrder);
         });
 
         // Also persist / update customer profile in Firestore & local state
@@ -332,26 +333,28 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
         }
       } catch (err) {
         console.warn('Firestore order sync error:', err);
+        queuePendingFirestoreOrder(newOrder);
       }
 
       // 3. Notify Telegram Bot in real-time in background
+      // 3. Telegram notification
       try {
         notifyNewOrder(newOrder).catch((err) => {
-          console.warn('Telegram new order alert background warning:', err);
+          console.warn('Telegram new order alert warning:', err);
         });
       } catch (err) {
-        console.warn('Telegram new order alert warning:', err);
+        console.warn('Telegram new order alert trigger warning:', err);
       }
 
-      // 4. Auto-append Order to Google Sheets (Backup Database)
-      if (isAutoSyncEnabled()) {
-        try {
-          appendOrderToGoogleSheet(newOrder).catch((err) => {
-            console.warn('Google Sheets background append notice:', err);
-          });
-        } catch (err) {
-          console.warn('Google Sheets trigger notice:', err);
-        }
+      // 4. Auto-append Order to Google Sheets (luôn lấy Google Sheets làm trung tâm)
+      try {
+        await Promise.race([
+          appendOrderToGoogleSheet(newOrder),
+          new Promise((resolve) => setTimeout(resolve, 1800)),
+        ]);
+      } catch (err) {
+        console.warn('Google Sheets trigger notice:', err);
+        queuePendingOrder(newOrder);
       }
 
       // Increment today's count in state

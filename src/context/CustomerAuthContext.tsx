@@ -13,7 +13,7 @@ import {
 } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { notifyNewRegistration } from '../lib/telegram';
-import { appendCustomerToGoogleSheet, isAutoSyncEnabled } from '../lib/googleSheetsService';
+import { appendCustomerToGoogleSheet, isAutoSyncEnabled, queuePendingCustomer, queuePendingFirestoreCustomer } from '../lib/googleSheetsService';
 import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
 import { isCreatedTodayVN } from '../utils/dateFormatter';
 import { clearCartStorage } from '../utils/cartStorage';
@@ -425,34 +425,33 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
     // Save to Local Accounts Cache immediately (100% fail-proof)
     saveLocalAccount(userWithPass);
 
-    // Save to Firestore in background (non-blocking)
+    // Save to Firestore in background (non-blocking) with fallback queue
     try {
       const customerDocRef = doc(db, 'customers', cleanPhone);
       setDoc(customerDocRef, sanitizeFirestoreData(userWithPass), { merge: true }).catch((err) => {
         console.warn('Firestore customer registration sync note:', err);
+        queuePendingFirestoreCustomer(newUser);
       });
     } catch (err) {
       console.warn('Firestore customer registration trigger warning:', err);
+      queuePendingFirestoreCustomer(newUser);
     }
 
-    // Send Telegram Notification in real-time in background
+    // Send Telegram Notification in real-time
     try {
-      notifyNewRegistration(newUser).catch((err) => {
-        console.warn('Telegram registration alert background note:', err);
+      safeWithTimeout(notifyNewRegistration(newUser), null, 1500).catch((err) => {
+        console.warn('Telegram registration alert note:', err);
       });
     } catch (err) {
-      console.warn('Telegram registration alert note:', err);
+      console.warn('Telegram registration alert trigger note:', err);
     }
 
-    // Auto-append Customer to Google Sheets in background
-    if (isAutoSyncEnabled()) {
-      try {
-        appendCustomerToGoogleSheet(newUser).catch((err) => {
-          console.warn('Google Sheets customer sync notice:', err);
-        });
-      } catch (err) {
-        console.warn('Google Sheets trigger notice:', err);
-      }
+    // Auto-append Customer to Google Sheets (luôn lấy Google Sheet làm trung tâm)
+    try {
+      await safeWithTimeout(appendCustomerToGoogleSheet(newUser), false, 1800);
+    } catch (err) {
+      console.warn('Google Sheets customer sync notice:', err);
+      queuePendingCustomer(newUser);
     }
 
     setCustomer(newUser);
