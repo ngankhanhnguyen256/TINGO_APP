@@ -27,7 +27,7 @@ import { JsonBackupModal } from './components/admin/JsonBackupModal';
 import { AdminOrdersModal } from './components/admin/AdminOrdersModal';
 import { GoogleSheetsSyncModal } from './components/admin/GoogleSheetsSyncModal';
 import { UnsavedChangesModal } from './components/admin/UnsavedChangesModal';
-import { CustomerAuthProvider, useCustomerAuth } from './context/CustomerAuthContext';
+import { CustomerAuthProvider, useCustomerAuth, normalizeVietnamesePhone } from './context/CustomerAuthContext';
 import { CustomerAuthModal } from './components/CustomerAuthModal';
 import { CustomerProfileModal } from './components/CustomerProfileModal';
 import { VisualEditorProvider, useVisualEditor } from './context/VisualEditorContext';
@@ -109,6 +109,43 @@ function MainApp() {
     return () => window.removeEventListener('tingo-cart-cleared', handleCartCleared);
   }, []);
 
+  // Automatic Startup Garbage Cleanup for Orders: deduplicates order.id and normalizes phones
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('tingo_orders_storage');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const dedupedMap = new Map<string, Order>();
+          parsed.forEach((ord: any) => {
+            if (!ord || !ord.id) return;
+            const cleanPhone = normalizeVietnamesePhone(ord.customerPhone || ord.phone);
+            const cleanOrd: Order = {
+              ...ord,
+              customerPhone: cleanPhone,
+            };
+            if (dedupedMap.has(ord.id)) {
+              dedupedMap.set(ord.id, { ...dedupedMap.get(ord.id)!, ...cleanOrd });
+            } else {
+              dedupedMap.set(ord.id, cleanOrd);
+            }
+          });
+
+          const cleanList = Array.from(dedupedMap.values()).sort((a, b) => {
+            const timeA = new Date(a.createdAt).getTime() || 0;
+            const timeB = new Date(b.createdAt).getTime() || 0;
+            return timeB - timeA;
+          });
+
+          setOrders(cleanList);
+          localStorage.setItem('tingo_orders_storage', JSON.stringify(cleanList));
+        }
+      }
+    } catch (err) {
+      console.warn('Orders startup deduplication note:', err);
+    }
+  }, []);
+
   // Real-time Firestore orders listener with resilient MERGE logic (Never overwrite/wipe local cache)
   useEffect(() => {
     try {
@@ -120,9 +157,11 @@ function MainApp() {
           snapshot.forEach((docSnap) => {
             const data = docSnap.data() as Order;
             if (docSnap.id) {
+              const cleanPhone = normalizeVietnamesePhone(data.customerPhone || (data as any).phone);
               incomingMap.set(docSnap.id, {
                 ...data,
                 id: docSnap.id,
+                customerPhone: cleanPhone,
               });
             }
           });
@@ -144,7 +183,11 @@ function MainApp() {
           // 3. Build merged map: start with local cache
           const mergedMap = new Map<string, Order>();
           localList.forEach((ord) => {
-            mergedMap.set(ord.id, ord);
+            const cleanPhone = normalizeVietnamesePhone(ord.customerPhone || (ord as any).phone);
+            mergedMap.set(ord.id, {
+              ...ord,
+              customerPhone: cleanPhone,
+            });
           });
 
           // 4. Merge incoming Firebase orders (updates status, adds new orders)

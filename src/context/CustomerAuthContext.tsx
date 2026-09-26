@@ -5,6 +5,7 @@ import {
   setDoc,
   getDoc,
   updateDoc,
+  deleteDoc,
   onSnapshot,
   collection,
   query,
@@ -221,11 +222,110 @@ export const CustomerAuthProvider: React.FC<{ children: React.ReactNode }> = ({ 
     }
   }, [customer?.phone]);
 
-  // Helper to get local registered accounts cache
+  // Automatic Startup Garbage Cleanup: Cleans 9-digit / corrupted duplicates from LocalStorage & Firestore
+  useEffect(() => {
+    const runCustomerCleanup = async () => {
+      // 1. Sanitize and deduplicate LocalStorage accounts cache
+      try {
+        const raw = localStorage.getItem(ACCOUNTS_CACHE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          const rawEntries: any[] = Array.isArray(parsed) ? parsed : Object.values(parsed);
+          const cleanedMap: Record<string, CustomerUser & { password?: string }> = {};
+
+          rawEntries.forEach((item) => {
+            if (!item) return;
+            const cleanPhone = normalizeVietnamesePhone(item.phone || item.id);
+            if (!cleanPhone || cleanPhone.length !== 10) return; // Drop corrupted records
+
+            const cleanCustomer: CustomerUser & { password?: string } = {
+              ...item,
+              id: `CUS-${cleanPhone}`,
+              phone: cleanPhone,
+            };
+
+            if (cleanedMap[cleanPhone]) {
+              // Merge into existing 10-digit record
+              cleanedMap[cleanPhone] = { ...cleanedMap[cleanPhone], ...cleanCustomer };
+            } else {
+              cleanedMap[cleanPhone] = cleanCustomer;
+            }
+
+            if (cleanCustomer.email) {
+              cleanedMap[cleanCustomer.email.toLowerCase()] = cleanCustomer;
+            }
+          });
+
+          localStorage.setItem(ACCOUNTS_CACHE_KEY, JSON.stringify(cleanedMap));
+        }
+      } catch (err) {
+        console.warn('LocalStorage customer cleanup note:', err);
+      }
+
+      // 2. Scan and clean Firestore customers: Remove 9-digit corrupted documents, merge into 10-digit docs
+      try {
+        const snap = await safeWithTimeout(getDocs(collection(db, 'customers')), null, 2500);
+        if (snap && snap.docs) {
+          for (const docSnap of snap.docs) {
+            const data = docSnap.data() as any;
+            const docId = docSnap.id;
+            const cleanPhone = normalizeVietnamesePhone(data.phone || docId);
+
+            // If the document ID is not a normalized 10-digit phone (e.g. 9-digit '908123456' or 'CUS-...')
+            if (cleanPhone && cleanPhone.length === 10 && docId !== cleanPhone) {
+              // 1. Ensure 10-digit document exists in Firestore
+              const sanitizedPayload = sanitizeFirestoreData({
+                ...data,
+                id: `CUS-${cleanPhone}`,
+                phone: cleanPhone,
+              });
+              await setDoc(doc(db, 'customers', cleanPhone), sanitizedPayload, { merge: true }).catch(() => {});
+
+              // 2. Delete the corrupted old 9-digit / non-normalized document
+              await deleteDoc(doc(db, 'customers', docId)).catch(() => {});
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Firestore customer cleanup note:', err);
+      }
+    };
+
+    runCustomerCleanup();
+  }, []);
+
+  // Helper to get local registered accounts cache (always normalized & deduplicated)
   const getLocalAccounts = (): Record<string, CustomerUser & { password?: string }> => {
     try {
       const raw = localStorage.getItem(ACCOUNTS_CACHE_KEY);
-      return raw ? JSON.parse(raw) : {};
+      if (!raw) return {};
+      const parsed = JSON.parse(raw);
+      const rawEntries: any[] = Array.isArray(parsed) ? parsed : Object.values(parsed);
+      const cleanedMap: Record<string, CustomerUser & { password?: string }> = {};
+
+      rawEntries.forEach((item) => {
+        if (!item) return;
+        const cleanPhone = normalizeVietnamesePhone(item.phone || item.id);
+        if (!cleanPhone || cleanPhone.length !== 10) return;
+
+        const cleanCustomer: CustomerUser & { password?: string } = {
+          ...item,
+          id: `CUS-${cleanPhone}`,
+          phone: cleanPhone,
+        };
+
+        if (cleanedMap[cleanPhone]) {
+          cleanedMap[cleanPhone] = { ...cleanedMap[cleanPhone], ...cleanCustomer };
+        } else {
+          cleanedMap[cleanPhone] = cleanCustomer;
+        }
+
+        if (cleanCustomer.email) {
+          cleanedMap[cleanCustomer.email.toLowerCase()] = cleanCustomer;
+        }
+      });
+
+      return cleanedMap;
     } catch {
       return {};
     }

@@ -831,13 +831,15 @@ export const getPendingSyncCounts = () => {
 };
 
 /* =========================================================================
- * FETCH FROM GOOGLE SHEETS
+ * FETCH FROM GOOGLE SHEETS (WITH STRICT 10-DIGIT DEDUPLICATION)
  * ========================================================================= */
 
 export const fetchCustomersFromGoogleSheet = async (token?: string): Promise<CustomerUser[]> => {
   const activeToken = token || getGoogleAccessToken();
   const sheetId = getSavedSheetId();
   const webhookUrl = getSavedWebhookUrl();
+
+  const rawList: CustomerUser[] = [];
 
   // Try OAuth API first if token available
   if (activeToken && sheetId) {
@@ -851,11 +853,11 @@ export const fetchCustomersFromGoogleSheet = async (token?: string): Promise<Cus
       if (res && res.ok) {
         const data = await res.json();
         const rows: string[][] = data.values || [];
-        return rows.map((r, idx) => {
+        rows.forEach((r, idx) => {
           const rawPhone = r[3] || '';
           const cleanPhone = normalizeVietnamesePhone(rawPhone);
           const validId = cleanPhone ? `CUS-${cleanPhone}` : (r[1] || `CUS-${idx}`);
-          return {
+          rawList.push({
             id: validId,
             name: r[2] || 'Khách hàng',
             phone: cleanPhone,
@@ -866,7 +868,7 @@ export const fetchCustomersFromGoogleSheet = async (token?: string): Promise<Cus
             freeshipVouchers: Number(r[8]) || 5,
             isBlocked: r[9] === 'Bị khóa',
             isFirstOrder: false,
-          };
+          });
         });
       }
     } catch (err) {
@@ -875,20 +877,20 @@ export const fetchCustomersFromGoogleSheet = async (token?: string): Promise<Cus
   }
 
   // Fallback: Try Webhook GET
-  if (webhookUrl) {
+  if (rawList.length === 0 && webhookUrl) {
     try {
       const res = await safeWithTimeout(fetch(webhookUrl), null, 3000);
       if (res && res.ok) {
         const json = await res.json();
         if (json.status === 'success' && Array.isArray(json.customers)) {
-          return json.customers.map((c: any, idx: number) => {
+          json.customers.forEach((c: any, idx: number) => {
             const cleanPhone = normalizeVietnamesePhone(c.phone);
             const validId = cleanPhone ? `CUS-${cleanPhone}` : (c.id || `CUS-${idx}`);
-            return {
+            rawList.push({
               ...c,
               id: validId,
               phone: cleanPhone,
-            };
+            });
           });
         }
       }
@@ -897,13 +899,34 @@ export const fetchCustomersFromGoogleSheet = async (token?: string): Promise<Cus
     }
   }
 
-  return [];
+  // Strict Map Deduplication by 10-digit clean phone to eliminate 9-digit duplicates
+  const dedupedMap = new Map<string, CustomerUser>();
+  rawList.forEach((c) => {
+    if (!c) return;
+    const cleanPhone = normalizeVietnamesePhone(c.phone);
+    if (!cleanPhone || cleanPhone.length !== 10) return; // Discard invalid/broken phones
+    const key = cleanPhone;
+    const cleanCustomer: CustomerUser = {
+      ...c,
+      id: `CUS-${cleanPhone}`,
+      phone: cleanPhone,
+    };
+    if (dedupedMap.has(key)) {
+      dedupedMap.set(key, { ...dedupedMap.get(key)!, ...cleanCustomer });
+    } else {
+      dedupedMap.set(key, cleanCustomer);
+    }
+  });
+
+  return Array.from(dedupedMap.values());
 };
 
 export const fetchOrdersFromGoogleSheet = async (token?: string): Promise<Partial<Order>[]> => {
   const activeToken = token || getGoogleAccessToken();
   const sheetId = getSavedSheetId();
   const webhookUrl = getSavedWebhookUrl();
+
+  const rawList: Partial<Order>[] = [];
 
   // Try OAuth API first
   if (activeToken && sheetId) {
@@ -917,20 +940,23 @@ export const fetchOrdersFromGoogleSheet = async (token?: string): Promise<Partia
       if (res && res.ok) {
         const data = await res.json();
         const rows: string[][] = data.values || [];
-        return rows.map((r) => ({
-          id: r[0],
-          createdAt: r[1],
-          customerName: r[2],
-          customerPhone: normalizeVietnamesePhone(r[3]),
-          shippingAddress: r[4],
-          city: r[5],
-          district: r[6],
-          total: Number(r[8]) || 0,
-          paymentMethod: (r[9] && r[9].includes('VietQR')) ? 'vietqr' : 'cod',
-          couponCode: r[10] && r[10] !== 'Không áp dụng' ? r[10] : undefined,
-          status: (r[11] === 'Đã giao' ? 'delivered' : r[11] === 'Đang giao' ? 'shipping' : r[11] === 'Đang xử lý' ? 'processing' : r[11] === 'Đã hủy' ? 'cancelled' : 'pending') as any,
-          notes: r[12] || '',
-        }));
+        rows.forEach((r) => {
+          if (!r[0]) return;
+          rawList.push({
+            id: r[0],
+            createdAt: r[1],
+            customerName: r[2],
+            customerPhone: normalizeVietnamesePhone(r[3]),
+            shippingAddress: r[4],
+            city: r[5],
+            district: r[6],
+            total: Number(r[8]) || 0,
+            paymentMethod: (r[9] && r[9].includes('VietQR')) ? 'vietqr' : 'cod',
+            couponCode: r[10] && r[10] !== 'Không áp dụng' ? r[10] : undefined,
+            status: (r[11] === 'Đã giao' ? 'delivered' : r[11] === 'Đang giao' ? 'shipping' : r[11] === 'Đang xử lý' ? 'processing' : r[11] === 'Đã hủy' ? 'cancelled' : 'pending') as any,
+            notes: r[12] || '',
+          });
+        });
       }
     } catch (err) {
       console.warn('OAuth fetch orders notice:', err);
@@ -938,16 +964,19 @@ export const fetchOrdersFromGoogleSheet = async (token?: string): Promise<Partia
   }
 
   // Fallback: Webhook GET
-  if (webhookUrl) {
+  if (rawList.length === 0 && webhookUrl) {
     try {
       const res = await safeWithTimeout(fetch(webhookUrl), null, 3000);
       if (res && res.ok) {
         const json = await res.json();
         if (json.status === 'success' && Array.isArray(json.orders)) {
-          return json.orders.map((o: any) => ({
-            ...o,
-            customerPhone: normalizeVietnamesePhone(o.customerPhone || o.phone),
-          }));
+          json.orders.forEach((o: any) => {
+            if (!o.id) return;
+            rawList.push({
+              ...o,
+              customerPhone: normalizeVietnamesePhone(o.customerPhone || o.phone),
+            });
+          });
         }
       }
     } catch (err) {
@@ -955,7 +984,18 @@ export const fetchOrdersFromGoogleSheet = async (token?: string): Promise<Partia
     }
   }
 
-  return [];
+  // Deduplicate orders by order.id (keeping the newest)
+  const dedupedOrderMap = new Map<string, Partial<Order>>();
+  rawList.forEach((o) => {
+    if (!o || !o.id) return;
+    if (dedupedOrderMap.has(o.id)) {
+      dedupedOrderMap.set(o.id, { ...dedupedOrderMap.get(o.id)!, ...o });
+    } else {
+      dedupedOrderMap.set(o.id, o);
+    }
+  });
+
+  return Array.from(dedupedOrderMap.values());
 };
 
 /* =========================================================================
@@ -1218,8 +1258,29 @@ export const bulkSyncCustomersToGoogleSheet = async (
     return { success: false, count: 0, error: 'Chưa cấu hình Google Webhook hoặc chưa đăng nhập Google' };
   }
 
-  // Filter to ONLY un-synced customers to eliminate duplicates completely!
-  const targetCustomers = options?.forceAll ? customers : customers.filter((c) => !isCustomerSynced(c));
+  // 1. Strict 10-digit Phone Deduplication first:
+  const dedupedMap = new Map<string, CustomerUser>();
+  customers.forEach((c) => {
+    if (!c) return;
+    const cleanPhone = normalizeVietnamesePhone(c.phone);
+    if (!cleanPhone || cleanPhone.length !== 10) return;
+    const key = cleanPhone;
+    const cleanCustomer: CustomerUser = {
+      ...c,
+      id: `CUS-${cleanPhone}`,
+      phone: cleanPhone,
+    };
+    if (dedupedMap.has(key)) {
+      dedupedMap.set(key, { ...dedupedMap.get(key)!, ...cleanCustomer });
+    } else {
+      dedupedMap.set(key, cleanCustomer);
+    }
+  });
+
+  const uniqueCustomers = Array.from(dedupedMap.values());
+
+  // 2. Filter to ONLY un-synced customers (unless forceAll is active)
+  const targetCustomers = options?.forceAll ? uniqueCustomers : uniqueCustomers.filter((c) => !isCustomerSynced(c));
 
   if (targetCustomers.length === 0) {
     return { success: true, count: 0 };
@@ -1296,8 +1357,26 @@ export const bulkSyncOrdersToGoogleSheet = async (
     return { success: false, count: 0, error: 'Chưa cấu hình Google Webhook hoặc chưa đăng nhập Google' };
   }
 
-  // Filter to ONLY un-synced orders to eliminate duplicates completely!
-  const targetOrders = options?.forceAll ? orders : orders.filter((o) => o.id && !isOrderSynced(o.id));
+  // 1. Strict ID Deduplication first:
+  const dedupedOrderMap = new Map<string, Order>();
+  orders.forEach((o) => {
+    if (!o || !o.id) return;
+    const cleanPhone = normalizeVietnamesePhone(o.customerPhone || (o as any).phone);
+    const cleanOrder: Order = {
+      ...o,
+      customerPhone: cleanPhone,
+    };
+    if (dedupedOrderMap.has(o.id)) {
+      dedupedOrderMap.set(o.id, { ...dedupedOrderMap.get(o.id)!, ...cleanOrder });
+    } else {
+      dedupedOrderMap.set(o.id, cleanOrder);
+    }
+  });
+
+  const uniqueOrders = Array.from(dedupedOrderMap.values());
+
+  // 2. Filter to ONLY un-synced orders to eliminate duplicates completely!
+  const targetOrders = options?.forceAll ? uniqueOrders : uniqueOrders.filter((o) => o.id && !isOrderSynced(o.id));
 
   if (targetOrders.length === 0) {
     return { success: true, count: 0 };

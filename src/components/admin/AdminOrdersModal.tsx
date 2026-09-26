@@ -76,6 +76,7 @@ import {
   syncAllExistingCustomers,
   appendCustomerToGoogleSheet
 } from '../../lib/googleSheetsService';
+import { normalizeVietnamesePhone } from '../../context/CustomerAuthContext';
 
 const ACCOUNTS_CACHE_KEY = 'tingo_registered_customers_cache';
 const BLOCKED_CACHE_KEY = 'tingo_blocked_identifiers_cache';
@@ -252,27 +253,35 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
     const mergeCustomers = (firebaseList: CustomerUser[]) => {
       const map: Record<string, CustomerUser> = {};
 
-      // 1. Fill from local accounts cache
+      // 1. Fill from local accounts cache (strictly 10-digit normalized phone keys)
       try {
         const raw = localStorage.getItem(ACCOUNTS_CACHE_KEY);
         if (raw) {
           const parsed = JSON.parse(raw);
-          Object.values(parsed).forEach((item: any) => {
-            if (item && item.phone) {
-              const clean = item.phone.replace(/[\s.-]/g, '');
-              map[clean] = {
-                id: item.id || `CUS-${clean}`,
-                name: item.name || 'Khách hàng',
-                phone: clean,
-                email: item.email || '',
-                address: item.address || '',
-                city: item.city || 'Hồ Chí Minh',
-                district: item.district || 'Quận 1',
-                freeshipVouchers: typeof item.freeshipVouchers === 'number' ? item.freeshipVouchers : 5,
-                isFirstOrder: item.isFirstOrder !== false,
-                isBlocked: !!item.isBlocked,
-                createdAt: item.createdAt || item.registeredAt || new Date().toISOString(),
-              };
+          const rawEntries: any[] = Array.isArray(parsed) ? parsed : Object.values(parsed);
+          rawEntries.forEach((item: any) => {
+            if (item) {
+              const clean = normalizeVietnamesePhone(item.phone || item.id);
+              if (clean && clean.length === 10) {
+                const customerObj: CustomerUser = {
+                  id: `CUS-${clean}`,
+                  name: item.name || 'Khách hàng',
+                  phone: clean,
+                  email: item.email || '',
+                  address: item.address || '',
+                  city: item.city || 'Hồ Chí Minh',
+                  district: item.district || 'Quận 1',
+                  freeshipVouchers: typeof item.freeshipVouchers === 'number' ? item.freeshipVouchers : 5,
+                  isFirstOrder: item.isFirstOrder !== false,
+                  isBlocked: !!item.isBlocked,
+                  createdAt: item.createdAt || item.registeredAt || new Date().toISOString(),
+                };
+                if (map[clean]) {
+                  map[clean] = { ...map[clean], ...customerObj };
+                } else {
+                  map[clean] = customerObj;
+                }
+              }
             }
           });
         }
@@ -282,17 +291,23 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
 
       // 2. Override/enrich with Firestore data
       firebaseList.forEach((fc) => {
-        const clean = fc.phone.replace(/[\s.-]/g, '');
-        map[clean] = {
-          ...(map[clean] || {}),
-          ...fc,
-        };
+        const clean = normalizeVietnamesePhone(fc.phone || fc.id);
+        if (clean && clean.length === 10) {
+          map[clean] = {
+            ...(map[clean] || {}),
+            ...fc,
+            id: `CUS-${clean}`,
+            phone: clean,
+          };
+        }
       });
 
       // 3. Auto-sync any local account missing from Firestore
       Object.values(map).forEach((cus) => {
-        if (!firebaseList.some((fc) => fc.phone.replace(/[\s.-]/g, '') === cus.phone)) {
-          setDoc(doc(db, 'customers', cus.phone), sanitizeFirestoreData(cus), { merge: true }).catch(() => {});
+        if (cus.phone && cus.phone.length === 10) {
+          if (!firebaseList.some((fc) => normalizeVietnamesePhone(fc.phone) === cus.phone)) {
+            setDoc(doc(db, 'customers', cus.phone), sanitizeFirestoreData(cus), { merge: true }).catch(() => {});
+          }
         }
       });
 
@@ -319,22 +334,36 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
           const loadedCustomers: CustomerUser[] = [];
           snapshot.forEach((docSnap) => {
             const data = docSnap.data();
-            loadedCustomers.push({
-              id: data.id || `CUS-${docSnap.id}`,
-              name: data.name || 'Khách hàng',
-              phone: data.phone || docSnap.id,
-              email: data.email || '',
-              address: data.address || '',
-              city: data.city || 'Hồ Chí Minh',
-              district: data.district || '',
-              freeshipVouchers: typeof data.freeshipVouchers === 'number' ? data.freeshipVouchers : 5,
-              isFirstOrder: data.isFirstOrder !== false,
-              isBlocked: data.isBlocked === true,
-              blockedAt: data.blockedAt || undefined,
-              blockedReason: data.blockedReason || undefined,
-              lastLoginAt: data.lastLoginAt || undefined,
-              createdAt: data.createdAt || data.registeredAt || data.lastOrderAt || new Date().toISOString(),
-            });
+            const cleanPhone = normalizeVietnamesePhone(data.phone || docSnap.id);
+
+            // Auto-clean: If Firestore doc ID was a 9-digit corrupted document, heal & delete it
+            if (cleanPhone && cleanPhone.length === 10 && docSnap.id !== cleanPhone) {
+              setDoc(doc(db, 'customers', cleanPhone), sanitizeFirestoreData({
+                ...data,
+                id: `CUS-${cleanPhone}`,
+                phone: cleanPhone,
+              }), { merge: true }).catch(() => {});
+              deleteDoc(doc(db, 'customers', docSnap.id)).catch(() => {});
+            }
+
+            if (cleanPhone && cleanPhone.length === 10) {
+              loadedCustomers.push({
+                id: `CUS-${cleanPhone}`,
+                name: data.name || 'Khách hàng',
+                phone: cleanPhone,
+                email: data.email || '',
+                address: data.address || '',
+                city: data.city || 'Hồ Chí Minh',
+                district: data.district || '',
+                freeshipVouchers: typeof data.freeshipVouchers === 'number' ? data.freeshipVouchers : 5,
+                isFirstOrder: data.isFirstOrder !== false,
+                isBlocked: data.isBlocked === true,
+                blockedAt: data.blockedAt || undefined,
+                blockedReason: data.blockedReason || undefined,
+                lastLoginAt: data.lastLoginAt || undefined,
+                createdAt: data.createdAt || data.registeredAt || data.lastOrderAt || new Date().toISOString(),
+              });
+            }
           });
 
           mergeCustomers(loadedCustomers);
