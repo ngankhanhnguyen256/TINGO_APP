@@ -3,6 +3,7 @@ import { auth, db } from './firebase';
 import { Order, CustomerUser } from '../types';
 import { doc, setDoc, getDocs, collection, getDoc, onSnapshot } from 'firebase/firestore';
 import { sanitizeFirestoreData } from '../utils/sanitizeFirestore';
+import { normalizeVietnamesePhone } from '../context/CustomerAuthContext';
 
 export const GOOGLE_SHEETS_SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
@@ -76,9 +77,9 @@ export const isOrderSynced = (orderId: string): boolean => {
 
 export const getCustomerSyncKey = (customer: CustomerUser | string | { phone?: string; id?: string }): string => {
   if (typeof customer === 'string') {
-    return customer.replace(/[\s.-]/g, '').trim();
+    return normalizeVietnamesePhone(customer) || customer.replace(/[\s.-]/g, '').trim();
   }
-  const cleanPhone = (customer.phone || '').replace(/[\s.-]/g, '').trim();
+  const cleanPhone = normalizeVietnamesePhone(customer.phone);
   if (cleanPhone) return cleanPhone;
   return (customer.id || '').trim();
 };
@@ -131,7 +132,8 @@ export const isCustomerSynced = (customer: CustomerUser | string): boolean => {
   if (set.has(key)) return true;
   if (typeof customer !== 'string') {
     if (customer.id && set.has(customer.id.trim())) return true;
-    if (customer.phone && set.has(customer.phone.replace(/[\s.-]/g, '').trim())) return true;
+    const cleanPhone = normalizeVietnamesePhone(customer.phone);
+    if (cleanPhone && set.has(cleanPhone)) return true;
   }
   return false;
 };
@@ -849,18 +851,23 @@ export const fetchCustomersFromGoogleSheet = async (token?: string): Promise<Cus
       if (res && res.ok) {
         const data = await res.json();
         const rows: string[][] = data.values || [];
-        return rows.map((r, idx) => ({
-          id: r[1] || `CUS-${r[3] || idx}`,
-          name: r[2] || 'Khách hàng',
-          phone: (r[3] || '').replace(/[\s.-]/g, ''),
-          email: r[4] || '',
-          address: r[5] || '',
-          city: r[6] || 'Hồ Chí Minh',
-          createdAt: r[7] || new Date().toISOString(),
-          freeshipVouchers: Number(r[8]) || 5,
-          isBlocked: r[9] === 'Bị khóa',
-          isFirstOrder: false,
-        }));
+        return rows.map((r, idx) => {
+          const rawPhone = r[3] || '';
+          const cleanPhone = normalizeVietnamesePhone(rawPhone);
+          const validId = cleanPhone ? `CUS-${cleanPhone}` : (r[1] || `CUS-${idx}`);
+          return {
+            id: validId,
+            name: r[2] || 'Khách hàng',
+            phone: cleanPhone,
+            email: r[4] || '',
+            address: r[5] || '',
+            city: r[6] || 'Hồ Chí Minh',
+            createdAt: r[7] || new Date().toISOString(),
+            freeshipVouchers: Number(r[8]) || 5,
+            isBlocked: r[9] === 'Bị khóa',
+            isFirstOrder: false,
+          };
+        });
       }
     } catch (err) {
       console.warn('OAuth fetch customers notice:', err);
@@ -874,7 +881,15 @@ export const fetchCustomersFromGoogleSheet = async (token?: string): Promise<Cus
       if (res && res.ok) {
         const json = await res.json();
         if (json.status === 'success' && Array.isArray(json.customers)) {
-          return json.customers;
+          return json.customers.map((c: any, idx: number) => {
+            const cleanPhone = normalizeVietnamesePhone(c.phone);
+            const validId = cleanPhone ? `CUS-${cleanPhone}` : (c.id || `CUS-${idx}`);
+            return {
+              ...c,
+              id: validId,
+              phone: cleanPhone,
+            };
+          });
         }
       }
     } catch (err) {
@@ -906,7 +921,7 @@ export const fetchOrdersFromGoogleSheet = async (token?: string): Promise<Partia
           id: r[0],
           createdAt: r[1],
           customerName: r[2],
-          customerPhone: (r[3] || '').replace(/[\s.-]/g, ''),
+          customerPhone: normalizeVietnamesePhone(r[3]),
           shippingAddress: r[4],
           city: r[5],
           district: r[6],
@@ -929,7 +944,10 @@ export const fetchOrdersFromGoogleSheet = async (token?: string): Promise<Partia
       if (res && res.ok) {
         const json = await res.json();
         if (json.status === 'success' && Array.isArray(json.orders)) {
-          return json.orders;
+          return json.orders.map((o: any) => ({
+            ...o,
+            customerPhone: normalizeVietnamesePhone(o.customerPhone || o.phone),
+          }));
         }
       }
     } catch (err) {
@@ -1371,10 +1389,10 @@ export const syncAllExistingCustomers = async (options?: { forceAll?: boolean })
       const list: CustomerUser[] = Array.isArray(parsed) ? parsed : Object.values(parsed);
       list.forEach((item: any) => {
         if (item && (item.phone || item.id)) {
-          const clean = (item.phone || '').replace(/[\s.-]/g, '');
+          const clean = normalizeVietnamesePhone(item.phone || item.id);
           const key = clean || item.id;
           customerMap[key] = {
-            id: item.id || `CUS-${clean || key}`,
+            id: clean ? `CUS-${clean}` : (item.id || `CUS-${key}`),
             name: item.name || 'Khách hàng',
             phone: clean,
             email: item.email || '',
@@ -1399,11 +1417,11 @@ export const syncAllExistingCustomers = async (options?: { forceAll?: boolean })
     if (snap && snap.docs) {
       snap.docs.forEach((docSnap) => {
         const data = docSnap.data() as any;
-        const clean = (data.phone || docSnap.id).replace(/[\s.-]/g, '');
+        const clean = normalizeVietnamesePhone(data.phone || docSnap.id);
         const key = clean || data.id || docSnap.id;
         if (key && !customerMap[key]) {
           customerMap[key] = {
-            id: data.id || `CUS-${clean || key}`,
+            id: clean ? `CUS-${clean}` : (data.id || `CUS-${key}`),
             name: data.name || 'Khách hàng',
             phone: clean,
             email: data.email || '',
@@ -1560,12 +1578,14 @@ export const reconcileAndSyncAll = async (
     const sheetOrders = await fetchOrdersFromGoogleSheet(activeToken || undefined);
 
     for (const sc of sheetCustomers) {
-      if (!sc.phone) continue;
-      const cleanPhone = sc.phone.replace(/[\s.-]/g, '');
+      const cleanPhone = normalizeVietnamesePhone(sc.phone);
+      if (!cleanPhone || cleanPhone.length !== 10) continue;
       try {
         safeWithTimeout(
           setDoc(doc(db, 'customers', cleanPhone), sanitizeFirestoreData({
             ...sc,
+            id: `CUS-${cleanPhone}`,
+            phone: cleanPhone,
             registeredAt: sc.createdAt,
             lastLoginAt: sc.createdAt,
           }), { merge: true }),
@@ -1581,16 +1601,20 @@ export const reconcileAndSyncAll = async (
 
     for (const so of sheetOrders) {
       if (!so.id) continue;
+      const cleanPhone = normalizeVietnamesePhone(so.customerPhone || (so as any).phone);
       try {
         safeWithTimeout(
-          setDoc(doc(db, 'orders', so.id), sanitizeFirestoreData(so), { merge: true }),
+          setDoc(doc(db, 'orders', so.id), sanitizeFirestoreData({
+            ...so,
+            customerPhone: cleanPhone,
+          }), { merge: true }),
           null,
           1000
         ).then(() => {
           ordersRestoredToFirestore++;
         }).catch(() => {});
       } catch {
-        if (so.id && so.createdAt && so.customerName && so.customerPhone) {
+        if (so.id && so.createdAt && so.customerName && cleanPhone) {
           queuePendingFirestoreOrder(so as Order);
         }
       }
@@ -1649,12 +1673,12 @@ export const restoreAllFromGoogleSheetsToFirestore = async (token?: string): Pro
 
     // 1. Restore Customers into Firestore and Local Cache
     for (const sc of sheetCustomers) {
-      if (!sc.phone) continue;
-      const cleanPhone = sc.phone.replace(/[\s.-]/g, '');
+      const cleanPhone = normalizeVietnamesePhone(sc.phone);
+      if (!cleanPhone || cleanPhone.length !== 10) continue;
       try {
         const custPayload = sanitizeFirestoreData({
           ...sc,
-          id: sc.id || `CUS-${cleanPhone}`,
+          id: `CUS-${cleanPhone}`,
           phone: cleanPhone,
           registeredAt: sc.createdAt || new Date().toISOString(),
           lastLoginAt: sc.createdAt || new Date().toISOString(),
@@ -1681,8 +1705,12 @@ export const restoreAllFromGoogleSheetsToFirestore = async (token?: string): Pro
     // 2. Restore Orders into Firestore and Local Cache
     for (const so of sheetOrders) {
       if (!so.id) continue;
+      const cleanPhone = normalizeVietnamesePhone(so.customerPhone || (so as any).phone);
       try {
-        const orderPayload = sanitizeFirestoreData(so);
+        const orderPayload = sanitizeFirestoreData({
+          ...so,
+          customerPhone: cleanPhone,
+        });
         await setDoc(doc(db, 'orders', so.id), orderPayload, { merge: true });
         ordersRestored++;
 
@@ -1690,10 +1718,13 @@ export const restoreAllFromGoogleSheetsToFirestore = async (token?: string): Pro
         try {
           const rawOrders = localStorage.getItem('tingo_orders_storage');
           const list: Order[] = rawOrders ? JSON.parse(rawOrders) : [];
-          if (!list.some((o) => o.id === so.id)) {
-            list.unshift(so as Order);
-            localStorage.setItem('tingo_orders_storage', JSON.stringify(list));
+          const idx = list.findIndex((o) => o.id === so.id);
+          if (idx >= 0) {
+            list[idx] = { ...list[idx], ...(orderPayload as Order) };
+          } else {
+            list.unshift(orderPayload as Order);
           }
+          localStorage.setItem('tingo_orders_storage', JSON.stringify(list));
         } catch {
           // ignore
         }

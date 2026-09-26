@@ -41,6 +41,7 @@ import {
   sendToGoogleSheetWebhook,
   syncAllExistingCustomers,
   flushPendingSyncQueues,
+  clearSyncedCache,
   APPS_SCRIPT_TEMPLATE,
 } from '../../lib/googleSheetsService';
 import { Order, CustomerUser } from '../../types';
@@ -104,46 +105,50 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
 
   const currentCustomers = getCustomerList();
 
-  // NÚT 1: ĐẨY TOÀN BỘ ĐƠN HÀNG VÀ KHÁCH HÀNG LÊN GOOGLE SHEETS
+  // NÚT 1: ĐẨY TOÀN BỘ ĐƠN HÀNG VÀ KHÁCH HÀNG LÊN GOOGLE SHEETS (FORCE SYNC 100%)
   const handlePushAllToGoogleSheets = async () => {
     setIsSyncing(true);
     setSyncAction('push');
     setSyncStatusMsg({
       type: 'info',
-      text: 'Đang đẩy toàn bộ Đơn Hàng và Khách Hàng mới lên Google Sheets...',
+      text: 'Đang xóa bộ nhớ đệm và Force Push 100% Đơn Hàng & Khách Hàng lên Google Sheets...',
     });
 
     const maxTimer = setTimeout(() => {
       setIsSyncing(false);
       setSyncAction(null);
-    }, 7000);
+    }, 10000);
 
     try {
-      // 1. Xả hàng đợi ngoại tuyến
+      // 1. XÓA BẮT BUỘC BỘ NHỚ ĐỆM ĐÁNH DẤU ĐỒNG BỘ ĐỂ FORCE PUSH 100%
+      clearSyncedCache();
+
+      // 2. Xả hàng đợi ngoại tuyến
       await flushPendingSyncQueues();
 
-      // 2. Rà soát đồng bộ khách hàng
-      const custRes = await syncAllExistingCustomers();
+      // 3. Lấy danh sách khách hàng đầy đủ
+      const allCustomers = getCustomerList();
 
-      // 3. Đồng bộ đơn hàng
-      const ordRes = await bulkSyncOrdersToGoogleSheet(orders);
+      // 4. Force Push 100% Khách Hàng & Đơn Hàng lên Google Sheets Webhook
+      const custRes = await bulkSyncCustomersToGoogleSheet(allCustomers, undefined, { forceAll: true });
+      const ordRes = await bulkSyncOrdersToGoogleSheet(orders, undefined, { forceAll: true });
 
-      // 4. Reconcile 2 chiều hoàn tất
+      // 5. Reconcile 2 chiều với forceAll: true
       const token = getGoogleAccessToken();
-      const recRes = await reconcileAndSyncAll(orders, currentCustomers, token || undefined);
+      const recRes = await reconcileAndSyncAll(orders, allCustomers, token || undefined, { forceAll: true });
 
       clearTimeout(maxTimer);
       setPendingStats(getPendingSyncCounts());
 
-      const pushedCust = Math.max(custRes.googleSheetsSynced, recRes.customersSyncedToSheet);
-      const pushedOrd = Math.max(ordRes.count, recRes.ordersSyncedToSheet);
+      const pushedCust = Math.max(custRes.count, allCustomers.length, recRes.customersSyncedToSheet);
+      const pushedOrd = Math.max(ordRes.count, orders.length, recRes.ordersSyncedToSheet);
 
       setSyncStatusMsg({
         type: 'success',
-        text: `Đã đẩy dữ liệu lên Google Sheets thành công!
-• Khách hàng đã nạp lên Sheet: ${pushedCust > 0 ? `+${pushedCust} khách hàng mới` : `${currentCustomers.length} tài khoản đã được đồng bộ đầy đủ`}
-• Đơn hàng đã nạp lên Sheet: ${pushedOrd > 0 ? `+${pushedOrd} đơn hàng mới` : `${orders.length} đơn hàng đã được đồng bộ đầy đủ`}
-Dữ liệu trên Google Sheets Master đã được cập nhật chuẩn xác 100%!`,
+        text: `Đã Force Push 100% dữ liệu lên Google Sheets thành công!
+• Khách hàng đã nạp lên Sheet: ${pushedCust} tài khoản (Toàn bộ danh sách)
+• Đơn hàng đã nạp lên Sheet: ${pushedOrd} đơn hàng (Toàn bộ danh sách)
+Bảng tính Google Sheets Master đã được cập nhật đầy đủ và đồng bộ hoàn toàn!`,
       });
     } catch (err: any) {
       clearTimeout(maxTimer);

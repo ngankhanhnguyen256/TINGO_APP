@@ -40,14 +40,32 @@ const safeWithTimeout = async <T,>(promise: Promise<T>, fallbackValue: T, timeou
 };
 
 /**
- * Normalizes Vietnamese phone numbers into clean 10-digit format starting with 0
+ * Normalizes Vietnamese phone numbers into clean 10-digit format starting with 0.
+ * Handles single quotes from Google Sheets, 84 country prefix, and missing leading 0 (9-digit numbers).
  */
-export const normalizeVietnamesePhone = (raw: string): string => {
-  if (!raw) return '';
-  let digits = raw.replace(/\D/g, '');
+export const normalizeVietnamesePhone = (raw: string | number | null | undefined): string => {
+  if (raw === null || raw === undefined) return '';
+  let str = String(raw).trim();
+  // Strip leading/trailing single or double quotes (e.g. '0908123456 -> 0908123456)
+  str = str.replace(/^['"]+/, '').replace(/['"]+$/, '').trim();
+
+  // Extract all numeric digits
+  let digits = str.replace(/\D/g, '');
+  if (!digits) return '';
+
+  // Handle +84 / 84 format: 84901234567 (11 digits) -> 0901234567 (10 digits)
   if (digits.startsWith('84') && digits.length === 11) {
     digits = '0' + digits.slice(2);
   }
+  // If starts with 84 and has 10 digits (e.g. 849012345) -> 09012345
+  else if (digits.startsWith('84') && digits.length === 10) {
+    digits = '0' + digits.slice(2);
+  }
+  // If Google Sheets truncated the leading 0 (9 digits not starting with 0, e.g. 908123456) -> prepend '0'
+  else if (digits.length === 9 && !digits.startsWith('0')) {
+    digits = '0' + digits;
+  }
+
   return digits;
 };
 
