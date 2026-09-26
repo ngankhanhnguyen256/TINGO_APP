@@ -23,8 +23,11 @@ const PENDING_SHEETS_ORDERS_KEY = 'tingo_pending_sheets_orders';
 const PENDING_FIRESTORE_CUSTOMERS_KEY = 'tingo_pending_firestore_customers';
 const PENDING_FIRESTORE_ORDERS_KEY = 'tingo_pending_firestore_orders';
 
+// Primary Hardcoded Webhook URL (Master Backup)
+export const HARDCODED_GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwPPuWqPz0wMiipd3BFrZ2v28p8FsGx18TtwEc3_6ItwIp4VQIilO9h9XiChP0XG--V2Q/exec';
+
 // Fallback in-memory webhook cache
-let inMemoryWebhookUrl: string | null = null;
+let inMemoryWebhookUrl: string | null = HARDCODED_GOOGLE_SHEET_WEBHOOK_URL;
 let cachedAccessToken: string | null = null;
 let isSigningIn = false;
 
@@ -139,17 +142,12 @@ export const setSavedSheetInfo = (id: string, url: string) => {
   }
 };
 
-export const getSavedWebhookUrl = (): string | null => {
-  if (inMemoryWebhookUrl) return inMemoryWebhookUrl;
-
-  // 1. Prioritize Environment Variables (VITE_GOOGLE_SHEET_WEBHOOK_URL or VITE_GOOGLE_SHEETS_WEBHOOK_URL)
-  const envWebhook = (typeof import.meta !== 'undefined' && (import.meta.env?.VITE_GOOGLE_SHEET_WEBHOOK_URL || import.meta.env?.VITE_GOOGLE_SHEETS_WEBHOOK_URL)) || '';
-  if (envWebhook && envWebhook.trim().startsWith('http')) {
-    inMemoryWebhookUrl = envWebhook.trim();
-    return inMemoryWebhookUrl;
+export const getSavedWebhookUrl = (): string => {
+  if (inMemoryWebhookUrl && inMemoryWebhookUrl.trim().startsWith('http')) {
+    return inMemoryWebhookUrl.trim();
   }
 
-  // 2. Read from LocalStorage (instant cache)
+  // 1. Check LocalStorage if previously customized
   try {
     const stored = localStorage.getItem(WEBHOOK_URL_STORAGE_KEY);
     if (stored && stored.trim().startsWith('http')) {
@@ -159,7 +157,10 @@ export const getSavedWebhookUrl = (): string | null => {
   } catch {
     // ignore
   }
-  return null;
+
+  // 2. Default directly to hardcoded URL
+  inMemoryWebhookUrl = HARDCODED_GOOGLE_SHEET_WEBHOOK_URL;
+  return HARDCODED_GOOGLE_SHEET_WEBHOOK_URL;
 };
 
 export const setSavedWebhookUrl = (url: string) => {
