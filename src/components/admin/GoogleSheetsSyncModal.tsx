@@ -6,22 +6,22 @@ import {
   RefreshCw,
   CheckCircle2,
   AlertCircle,
-  Sparkles,
   Database,
-  ArrowRight,
-  ShieldCheck,
-  Zap,
   Users,
   ShoppingBag,
-  ArrowLeftRight,
   Clock,
   Check,
   Copy,
-  Code2,
-  Send,
-  HelpCircle,
   CheckCheck,
-  UserCheck,
+  Send,
+  UploadCloud,
+  DownloadCloud,
+  Settings2,
+  ChevronDown,
+  ChevronUp,
+  Zap,
+  ShieldCheck,
+  Link2,
 } from 'lucide-react';
 import {
   signInWithGoogle,
@@ -39,16 +39,11 @@ import {
   setAutoSyncEnabled,
   getPendingSyncCounts,
   sendToGoogleSheetWebhook,
-  fetchCustomersFromGoogleSheet,
-  fetchOrdersFromGoogleSheet,
   syncAllExistingCustomers,
   flushPendingSyncQueues,
   APPS_SCRIPT_TEMPLATE,
 } from '../../lib/googleSheetsService';
 import { Order, CustomerUser } from '../../types';
-import { doc, setDoc } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
-import { sanitizeFirestoreData } from '../../utils/sanitizeFirestore';
 
 const ACCOUNTS_CACHE_KEY = 'tingo_registered_customers_cache';
 
@@ -65,16 +60,14 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
   orders,
   customers: initialCustomers,
 }) => {
-  const [activeTab, setActiveTab] = useState<'sync' | 'webhook' | 'guide'>('sync');
-  const [isConnecting, setIsConnecting] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [syncType, setSyncType] = useState<'all' | 'orders' | 'customers' | 'restore' | 'test' | 'allCustomers' | null>(null);
+  const [syncAction, setSyncAction] = useState<'push' | 'restore' | 'test' | null>(null);
   const [sheetUrl, setSheetUrl] = useState<string | null>(getSavedSheetUrl());
   const [sheetId, setSheetId] = useState<string | null>(getSavedSheetId());
   const [webhookUrl, setWebhookUrl] = useState<string>(getSavedWebhookUrl() || '');
-  const [hasToken, setHasToken] = useState<boolean>(!!getGoogleAccessToken());
   const [autoSync, setAutoSync] = useState<boolean>(isAutoSyncEnabled());
   const [pendingStats, setPendingStats] = useState(getPendingSyncCounts());
+  const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
   const [copiedScript, setCopiedScript] = useState(false);
   const [savedWebhookSuccess, setSavedWebhookSuccess] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState<{
@@ -82,14 +75,14 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     text: string;
   } | null>(null);
 
-  // Load all local customers if not passed
+  // Load all local customers
   const getCustomerList = (): CustomerUser[] => {
     if (initialCustomers && initialCustomers.length > 0) return initialCustomers;
     try {
       const raw = localStorage.getItem(ACCOUNTS_CACHE_KEY);
       if (raw) {
         const obj = JSON.parse(raw);
-        return Object.values(obj) as CustomerUser[];
+        return Array.isArray(obj) ? obj : (Object.values(obj) as CustomerUser[]);
       }
     } catch {
       // ignore
@@ -102,7 +95,6 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       setSheetUrl(getSavedSheetUrl());
       setSheetId(getSavedSheetId());
       setWebhookUrl(getSavedWebhookUrl() || '');
-      setHasToken(!!getGoogleAccessToken());
       setAutoSync(isAutoSyncEnabled());
       setPendingStats(getPendingSyncCounts());
     }
@@ -112,10 +104,104 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
 
   const currentCustomers = getCustomerList();
 
-  const handleCopyScript = () => {
-    navigator.clipboard.writeText(APPS_SCRIPT_TEMPLATE);
-    setCopiedScript(true);
-    setTimeout(() => setCopiedScript(false), 3000);
+  // NÚT 1: ĐẨY TOÀN BỘ ĐƠN HÀNG VÀ KHÁCH HÀNG LÊN GOOGLE SHEETS
+  const handlePushAllToGoogleSheets = async () => {
+    setIsSyncing(true);
+    setSyncAction('push');
+    setSyncStatusMsg({
+      type: 'info',
+      text: 'Đang đẩy toàn bộ Đơn Hàng và Khách Hàng mới lên Google Sheets...',
+    });
+
+    const maxTimer = setTimeout(() => {
+      setIsSyncing(false);
+      setSyncAction(null);
+    }, 7000);
+
+    try {
+      // 1. Xả hàng đợi ngoại tuyến
+      await flushPendingSyncQueues();
+
+      // 2. Rà soát đồng bộ khách hàng
+      const custRes = await syncAllExistingCustomers();
+
+      // 3. Đồng bộ đơn hàng
+      const ordRes = await bulkSyncOrdersToGoogleSheet(orders);
+
+      // 4. Reconcile 2 chiều hoàn tất
+      const token = getGoogleAccessToken();
+      const recRes = await reconcileAndSyncAll(orders, currentCustomers, token || undefined);
+
+      clearTimeout(maxTimer);
+      setPendingStats(getPendingSyncCounts());
+
+      const pushedCust = Math.max(custRes.googleSheetsSynced, recRes.customersSyncedToSheet);
+      const pushedOrd = Math.max(ordRes.count, recRes.ordersSyncedToSheet);
+
+      setSyncStatusMsg({
+        type: 'success',
+        text: `Đã đẩy dữ liệu lên Google Sheets thành công!
+• Khách hàng đã nạp lên Sheet: ${pushedCust > 0 ? `+${pushedCust} khách hàng mới` : `${currentCustomers.length} tài khoản đã được đồng bộ đầy đủ`}
+• Đơn hàng đã nạp lên Sheet: ${pushedOrd > 0 ? `+${pushedOrd} đơn hàng mới` : `${orders.length} đơn hàng đã được đồng bộ đầy đủ`}
+Dữ liệu trên Google Sheets Master đã được cập nhật chuẩn xác 100%!`,
+      });
+    } catch (err: any) {
+      clearTimeout(maxTimer);
+      setSyncStatusMsg({
+        type: 'error',
+        text: `Lỗi khi đẩy dữ liệu lên Google Sheets: ${err.message || 'Vui lòng kiểm tra lại Webhook URL'}`,
+      });
+    } finally {
+      clearTimeout(maxTimer);
+      setIsSyncing(false);
+      setSyncAction(null);
+    }
+  };
+
+  // NÚT 2: KHÔI PHỤC TOÀN BỘ TỪ GOOGLE SHEETS VỀ APP & FIREBASE
+  const handleRestoreFromGoogleSheets = async () => {
+    setIsSyncing(true);
+    setSyncAction('restore');
+    setSyncStatusMsg({
+      type: 'info',
+      text: 'Đang đọc dữ liệu Master từ Google Sheets và khôi phục vào Firebase Firestore & LocalStorage...',
+    });
+
+    const maxTimer = setTimeout(() => {
+      setIsSyncing(false);
+      setSyncAction(null);
+    }, 8000);
+
+    try {
+      const res = await restoreAllFromGoogleSheetsToFirestore();
+      clearTimeout(maxTimer);
+      setPendingStats(getPendingSyncCounts());
+
+      if (res.success) {
+        setSyncStatusMsg({
+          type: 'success',
+          text: `Khôi phục dữ liệu từ Google Sheets về App & Firebase thành công!
+• Tìm thấy trên Google Sheets: ${res.totalCustomersInSheet} Khách Hàng | ${res.totalOrdersInSheet} Đơn Hàng
+• Đã khôi phục & ghi đè an toàn: ${res.customersRestored} Khách Hàng | ${res.ordersRestored} Đơn Hàng
+Hệ thống Firebase Firestore và Bộ nhớ máy đã được khôi phục đồng bộ hoàn toàn!`,
+        });
+      } else {
+        setSyncStatusMsg({
+          type: 'error',
+          text: res.error || 'Không thể đọc dữ liệu từ Google Sheets để khôi phục.',
+        });
+      }
+    } catch (err: any) {
+      clearTimeout(maxTimer);
+      setSyncStatusMsg({
+        type: 'error',
+        text: `Lỗi khôi phục: ${err.message || 'Không thể kết nối đến Google Sheets'}`,
+      });
+    } finally {
+      clearTimeout(maxTimer);
+      setIsSyncing(false);
+      setSyncAction(null);
+    }
   };
 
   const handleSaveWebhook = () => {
@@ -124,7 +210,7 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
     setTimeout(() => setSavedWebhookSuccess(false), 3000);
     setSyncStatusMsg({
       type: 'success',
-      text: 'Đã lưu URL Webhook Google Sheets thành công! Toàn bộ khách hàng đặt hàng hoặc đăng ký mới từ mọi thiết bị sẽ tự động được gửi về Sheet 24/7.',
+      text: 'Đã lưu cấu hình Webhook Google Sheets thành công! Dữ liệu sẽ tự động đẩy về 24/7.',
     });
   };
 
@@ -137,71 +223,21 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       return;
     }
     setIsSyncing(true);
-    setSyncType('test');
+    setSyncAction('test');
     setSyncStatusMsg({
       type: 'info',
-      text: 'Đang gửi bản ghi thử nghiệm lên Google Sheet qua Webhook...',
+      text: 'Đang gửi bản ghi thử nghiệm lên Google Sheets...',
     });
 
     try {
-      // Save webhook url first
       setSavedWebhookUrl(webhookUrl);
 
-      const testOrder: Order = {
-        id: `TEST-${Math.floor(1000 + Math.random() * 9000)}`,
-        createdAt: new Date().toISOString(),
-        customerName: 'Khách Hàng Thử Nghiệm',
-        customerPhone: '0901234567',
-        customerEmail: 'test@tingodrink.vn',
-        shippingAddress: '123 Đường Tự Nhiên, Phường Bến Nghé',
-        city: 'Hồ Chí Minh',
-        district: 'Quận 1',
-        paymentMethod: 'cod',
-        items: [
-          {
-            product: {
-              id: 'p-test',
-              name: 'Nước Uống Thanh Lọc TINGO Test',
-              slug: 'nuoc-uong-test',
-              price: 150000,
-              category: 'nuoc-uong',
-              categoryLabel: 'Nước Uống',
-              image: '',
-              rating: 5,
-              reviewsCount: 1,
-              description: 'Sản phẩm test',
-              shortDesc: 'Sản phẩm test',
-              ingredients: ['100% Tự nhiên'],
-              usageInstructions: ['Uống trực tiếp'],
-              volumeOrWeight: '350ml',
-              benefits: ['Thanh lọc cơ thể'],
-              inStock: true,
-            },
-            quantity: 1,
-          },
-        ],
-        subtotal: 150000,
-        discountAmount: 0,
-        shippingFee: 0,
-        total: 150000,
-        status: 'pending',
-        notes: 'Đơn hàng test kiểm tra kết nối Google Sheet',
-        timeline: [
-          {
-            status: 'pending',
-            title: 'Đơn hàng test',
-            time: 'Vừa xong',
-            completed: true,
-          },
-        ],
-      };
-
       const testCustomer: CustomerUser = {
-        id: 'CUS-0901234567',
-        name: 'Khách Hàng Thử Nghiệm',
+        id: 'CUS-TEST',
+        name: 'Khách Hàng Test',
         phone: '0901234567',
         email: 'test@tingodrink.vn',
-        address: '123 Đường Tự Nhiên',
+        address: '123 Test Street',
         city: 'Hồ Chí Minh',
         createdAt: new Date().toISOString(),
         freeshipVouchers: 5,
@@ -209,222 +245,26 @@ export const GoogleSheetsSyncModal: React.FC<GoogleSheetsSyncModalProps> = ({
       };
 
       await sendToGoogleSheetWebhook({ type: 'customer', data: testCustomer });
-      await sendToGoogleSheetWebhook({ type: 'order', data: testOrder });
 
       setSyncStatusMsg({
         type: 'success',
-        text: 'Thành công 100%! Đã gửi bản ghi Khách hàng test & Đơn hàng test lên Google Sheets qua Webhook. Bạn hãy mở Google Sheet kiểm tra trang ĐƠN HÀNG và KHÁCH HÀNG!',
+        text: 'Kết nối Webhook thành công 100%! Đã gửi bản ghi thử nghiệm lên Google Sheets.',
       });
     } catch (err: any) {
       setSyncStatusMsg({
         type: 'error',
-        text: `Lỗi kết nối Webhook: ${err.message || 'Không thể gửi dữ liệu'}`,
+        text: `Lỗi kiểm tra Webhook: ${err.message}`,
       });
     } finally {
       setIsSyncing(false);
-      setSyncType(null);
+      setSyncAction(null);
     }
   };
 
-  const handleGoogleLoginAndCreate = async () => {
-    setIsConnecting(true);
-    setSyncStatusMsg(null);
-    try {
-      const authRes = await signInWithGoogle();
-      setHasToken(true);
-
-      setSyncStatusMsg({
-        type: 'info',
-        text: `Đã kết nối với ${authRes.user.email}. Đang khởi tạo bảng tính TINGO trên Google Sheets...`,
-      });
-
-      let currentSheetId = getSavedSheetId();
-      let currentSheetUrl = getSavedSheetUrl();
-
-      if (!currentSheetId) {
-        const sheetRes = await createTingoSpreadsheet(authRes.accessToken);
-        currentSheetId = sheetRes.id;
-        currentSheetUrl = sheetRes.url;
-        setSheetId(sheetRes.id);
-        setSheetUrl(sheetRes.url);
-      }
-
-      setSyncStatusMsg({
-        type: 'info',
-        text: `Đang đồng bộ toàn diện khách hàng & ${orders.length} đơn hàng sang Google Sheets...`,
-      });
-
-      const res = await reconcileAndSyncAll(orders, currentCustomers, authRes.accessToken);
-      setPendingStats(getPendingSyncCounts());
-
-      if (res.success) {
-        setSyncStatusMsg({
-          type: 'success',
-          text: `Tuyệt vời! Đã đồng bộ thành công sang Google Sheets (Khách hàng: +${res.customersSyncedToSheet}, Đơn hàng: +${res.ordersSyncedToSheet}). Dữ liệu đã an toàn 100%!`,
-        });
-      } else {
-        setSyncStatusMsg({
-          type: 'error',
-          text: res.error || 'Đã tạo file Google Sheets nhưng chưa đồng bộ hết dữ liệu.',
-        });
-      }
-    } catch (err: any) {
-      setSyncStatusMsg({
-        type: 'error',
-        text: err.message || 'Không thể kết nối với Google. Vui lòng thử lại.',
-      });
-    } finally {
-      setIsConnecting(false);
-    }
-  };
-
-  const handleSyncAllCustomersNow = async () => {
-    setIsSyncing(true);
-    setSyncType('allCustomers');
-    setSyncStatusMsg({
-      type: 'info',
-      text: 'Đang rà soát và đồng bộ toàn bộ tài khoản khách hàng từ App + Local Cache vào Firebase và Google Sheets...',
-    });
-
-    const maxTimer = setTimeout(() => {
-      setIsSyncing(false);
-      setSyncType(null);
-    }, 6000);
-
-    try {
-      await flushPendingSyncQueues();
-      const res = await syncAllExistingCustomers();
-      clearTimeout(maxTimer);
-      setPendingStats(getPendingSyncCounts());
-      setSyncStatusMsg({
-        type: 'success',
-        text: `Rà soát & đồng bộ khách hàng thành công 100%!
-• Tổng số tài khoản khách hàng: ${res.totalChecked}
-• Đã bảo đảm nạp vào Firebase: ${res.firebaseSynced}
-• Đã nạp vào Google Sheets (kèm STT 1-1000 & Dropdown Tình Trạng): ${res.googleSheetsSynced}`,
-      });
-    } catch (err: any) {
-      clearTimeout(maxTimer);
-      setSyncStatusMsg({
-        type: 'error',
-        text: `Lỗi khi rà soát đồng bộ khách hàng: ${err.message}`,
-      });
-    } finally {
-      clearTimeout(maxTimer);
-      setIsSyncing(false);
-      setSyncType(null);
-    }
-  };
-
-  const handleFullTwoWaySync = async () => {
-    setIsSyncing(true);
-    setSyncType('all');
-    setSyncStatusMsg({
-      type: 'info',
-      text: 'Đang rà soát và đồng bộ hai chiều (Google Sheet làm trung tâm ⇄ Firebase / Local)...',
-    });
-
-    const maxTimer = setTimeout(() => {
-      setIsSyncing(false);
-      setSyncType(null);
-    }, 6000);
-
-    try {
-      await flushPendingSyncQueues();
-      const res = await reconcileAndSyncAll(orders, currentCustomers);
-      clearTimeout(maxTimer);
-      setPendingStats(getPendingSyncCounts());
-
-      if (res.success) {
-        setSyncStatusMsg({
-          type: 'success',
-          text: `Đồng bộ 2 chiều hoàn tất!
-• Đã đẩy lên Sheet: +${res.customersSyncedToSheet} Khách hàng, +${res.ordersSyncedToSheet} Đơn hàng
-• Đã khôi phục về Firebase: +${res.customersRestoredToFirestore} Khách hàng, +${res.ordersRestoredToFirestore} Đơn hàng.`,
-        });
-      } else {
-        setSyncStatusMsg({
-          type: 'error',
-          text: res.error || 'Đồng bộ thất bại, vui lòng kết nối lại tài khoản hoặc kiểm tra Webhook.',
-        });
-      }
-    } catch (err: any) {
-      clearTimeout(maxTimer);
-      setSyncStatusMsg({
-        type: 'error',
-        text: err.message || 'Lỗi xử lý đồng bộ hai chiều',
-      });
-    } finally {
-      clearTimeout(maxTimer);
-      setIsSyncing(false);
-      setSyncType(null);
-    }
-  };
-
-  const handleRestoreFromSheetToFirebase = async () => {
-    setIsSyncing(true);
-    setSyncType('restore');
-    setSyncStatusMsg({
-      type: 'info',
-      text: 'Đang kết nối Google Sheets để đọc toàn bộ danh sách Đơn Hàng & Khách Hàng và khôi phục vào Firebase Firestore...',
-    });
-
-    try {
-      const res = await restoreAllFromGoogleSheetsToFirestore();
-      setPendingStats(getPendingSyncCounts());
-
-      if (res.success) {
-        setSyncStatusMsg({
-          type: 'success',
-          text: `Khôi phục dữ liệu từ Google Sheet vào Firebase thành công 100%!
-• Tổng dữ liệu tìm thấy trên Google Sheet: ${res.totalCustomersInSheet} Khách hàng | ${res.totalOrdersInSheet} Đơn hàng.
-• Đã khôi phục an toàn vào Firebase Firestore: ${res.customersRestored} Khách hàng | ${res.ordersRestored} Đơn hàng.
-Toàn bộ hệ thống website và trang quản trị đã được đồng bộ chuẩn xác!`,
-        });
-      } else {
-        setSyncStatusMsg({
-          type: 'error',
-          text: res.error || 'Lỗi khi đọc dữ liệu từ Google Sheet để khôi phục.',
-        });
-      }
-    } catch (err: any) {
-      setSyncStatusMsg({
-        type: 'error',
-        text: `Lỗi khi khôi phục từ Sheet sang Firebase: ${err.message}`,
-      });
-    } finally {
-      setIsSyncing(false);
-      setSyncType(null);
-    }
-  };
-
-  const handleSyncOrdersOnly = async () => {
-    setIsSyncing(true);
-    setSyncType('orders');
-    setSyncStatusMsg(null);
-    try {
-      const res = await bulkSyncOrdersToGoogleSheet(orders);
-      setPendingStats(getPendingSyncCounts());
-      if (res.success) {
-        setSyncStatusMsg({
-          type: 'success',
-          text: res.count > 0 ? `Đã đồng bộ mới ${res.count} đơn hàng vào Google Sheets!` : 'Tất cả đơn hàng đã được cập nhật đầy đủ trong Google Sheets.',
-        });
-      } else {
-        setSyncStatusMsg({
-          type: 'error',
-          text: res.error || 'Đồng bộ đơn hàng thất bại',
-        });
-      }
-    } catch (err: any) {
-      setSyncStatusMsg({
-        type: 'error',
-        text: err.message || 'Lỗi khi đồng bộ đơn hàng',
-      });
-    } finally {
-      setIsSyncing(false);
-      setSyncType(null);
-    }
+  const handleCopyScript = () => {
+    navigator.clipboard.writeText(APPS_SCRIPT_TEMPLATE);
+    setCopiedScript(true);
+    setTimeout(() => setCopiedScript(false), 3000);
   };
 
   const handleToggleAutoSync = () => {
@@ -434,84 +274,45 @@ Toàn bộ hệ thống website và trang quản trị đã được đồng b�
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/70 backdrop-blur-sm animate-fadeIn">
-      <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden border border-slate-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/70 backdrop-blur-sm animate-fade-in">
+      <div className="bg-white rounded-3xl w-full max-w-xl shadow-2xl overflow-hidden border border-slate-200/80 flex flex-col max-h-[90vh] animate-scale-in">
         
-        {/* Header */}
-        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between bg-gradient-to-r from-emerald-800 to-[#008874] text-white">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-xl bg-white/10 flex items-center justify-center">
+        {/* Header - Sleek Minimal High-End Gradient */}
+        <div className="px-6 py-4.5 bg-gradient-to-r from-emerald-900 via-teal-800 to-[#008874] text-white flex items-center justify-between shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-white/10 flex items-center justify-center shadow-inner">
               <FileSpreadsheet className="w-5 h-5 text-emerald-300" />
             </div>
             <div>
-              <h3 className="font-bold text-base leading-tight">
-                Đồng Bộ Google Sheets & Khôi Phục Firebase
+              <h3 className="font-bold text-base tracking-tight text-white">
+                Bảng Điều Khiển Đồng Bộ Dữ Liệu
               </h3>
-              <p className="text-xs text-emerald-100">
-                Tự động STT 1-1000 • Dropdown Tình Trạng • Google Sheets Master 24/7
+              <p className="text-xs text-emerald-100/90 font-medium">
+                Google Sheets Master ⇄ App & Firebase Firestore
               </p>
             </div>
           </div>
+
           <button
             onClick={onClose}
-            className="p-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer"
           >
-            <X className="w-5 h-5" />
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="flex border-b border-slate-200 bg-slate-50 px-6 pt-2">
-          <button
-            type="button"
-            onClick={() => setActiveTab('sync')}
-            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'sync'
-                ? 'border-[#008874] text-[#008874] bg-white rounded-t-xl shadow-sm'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <ArrowLeftRight className="w-3.5 h-3.5" />
-            <span>Bảng Điều Khiển Đồng Bộ</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('webhook')}
-            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'webhook'
-                ? 'border-[#008874] text-[#008874] bg-white rounded-t-xl shadow-sm'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <Zap className="w-3.5 h-3.5 text-amber-500" />
-            <span>Webhook Tự Động 24/7 (Khuyên Dùng)</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('guide')}
-            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'guide'
-                ? 'border-[#008874] text-[#008874] bg-white rounded-t-xl shadow-sm'
-                : 'border-transparent text-slate-500 hover:text-slate-800'
-            }`}
-          >
-            <HelpCircle className="w-3.5 h-3.5" />
-            <span>Hướng Dẫn Cài Đặt STT & Tình Trạng</span>
-          </button>
-        </div>
-
-        {/* Modal Body */}
-        <div className="p-6 space-y-5 max-h-[75vh] overflow-y-auto">
+        {/* Modal Content */}
+        <div className="p-6 space-y-5 overflow-y-auto flex-1">
           
-          {/* Status Alert Banner */}
+          {/* Status Message Notification */}
           {syncStatusMsg && (
             <div
-              className={`p-3.5 rounded-2xl text-xs flex items-start gap-2.5 border ${
+              className={`p-3.5 rounded-2xl text-xs flex items-start gap-2.5 border transition-all animate-fade-in ${
                 syncStatusMsg.type === 'success'
-                  ? 'bg-emerald-50 text-emerald-900 border-emerald-300'
+                  ? 'bg-emerald-50 text-emerald-950 border-emerald-300 shadow-xs'
                   : syncStatusMsg.type === 'error'
-                  ? 'bg-rose-50 text-rose-900 border-rose-300'
-                  : 'bg-blue-50 text-blue-900 border-blue-300'
+                  ? 'bg-rose-50 text-rose-950 border-rose-300 shadow-xs'
+                  : 'bg-teal-50 text-teal-950 border-teal-300 shadow-xs'
               }`}
             >
               {syncStatusMsg.type === 'success' ? (
@@ -519,328 +320,233 @@ Toàn bộ hệ thống website và trang quản trị đã được đồng b�
               ) : syncStatusMsg.type === 'error' ? (
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
               ) : (
-                <RefreshCw className="w-4 h-4 text-blue-600 shrink-0 mt-0.5 animate-spin" />
+                <RefreshCw className="w-4 h-4 text-teal-600 shrink-0 mt-0.5 animate-spin" />
               )}
-              <span className="font-medium leading-relaxed whitespace-pre-line">{syncStatusMsg.text}</span>
+              <div className="flex-1 font-medium leading-relaxed whitespace-pre-line">
+                {syncStatusMsg.text}
+              </div>
             </div>
           )}
 
-          {activeTab === 'sync' && (
-            <>
-              {/* Quick Overview Stats */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 text-center">
-                  <div className="text-[10px] uppercase font-bold text-slate-500 flex items-center justify-center gap-1">
-                    <ShoppingBag className="w-3.5 h-3.5 text-emerald-600" />
-                    Đơn Hàng Hiện Có
-                  </div>
-                  <div className="text-xl font-extrabold text-slate-800 mt-1">{orders.length}</div>
-                </div>
+          {/* Quick Stats Minimal Ribbon */}
+          <div className="grid grid-cols-3 gap-2.5">
+            <div className="p-3 bg-slate-50/80 rounded-2xl border border-slate-200/80 text-center">
+              <div className="text-[10px] uppercase font-bold text-slate-500 flex items-center justify-center gap-1">
+                <ShoppingBag className="w-3.5 h-3.5 text-emerald-600" />
+                Đơn Hàng
+              </div>
+              <div className="text-lg font-black text-slate-900 mt-0.5">{orders.length}</div>
+            </div>
 
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 text-center">
-                  <div className="text-[10px] uppercase font-bold text-slate-500 flex items-center justify-center gap-1">
-                    <Users className="w-3.5 h-3.5 text-teal-600" />
-                    Khách Hàng Đăng Ký
-                  </div>
-                  <div className="text-xl font-extrabold text-slate-800 mt-1">{currentCustomers.length}</div>
-                </div>
+            <div className="p-3 bg-slate-50/80 rounded-2xl border border-slate-200/80 text-center">
+              <div className="text-[10px] uppercase font-bold text-slate-500 flex items-center justify-center gap-1">
+                <Users className="w-3.5 h-3.5 text-teal-600" />
+                Khách Hàng
+              </div>
+              <div className="text-lg font-black text-slate-900 mt-0.5">{currentCustomers.length}</div>
+            </div>
 
-                <div className="col-span-2 sm:col-span-1 p-3 bg-amber-50/70 rounded-2xl border border-amber-200 text-center">
-                  <div className="text-[10px] uppercase font-bold text-amber-800 flex items-center justify-center gap-1">
-                    <Clock className="w-3.5 h-3.5 text-amber-600" />
-                    Hàng Chờ Đồng Bộ
+            <div className="p-3 bg-emerald-50/70 rounded-2xl border border-emerald-200/80 text-center">
+              <div className="text-[10px] uppercase font-bold text-emerald-800 flex items-center justify-center gap-1">
+                <Zap className="w-3.5 h-3.5 text-emerald-600" />
+                Trạng Thái
+              </div>
+              <div className="text-xs font-black text-emerald-800 flex items-center justify-center gap-1 mt-1">
+                {pendingStats.totalPending > 0 ? (
+                  <span className="text-amber-700 font-bold">{pendingStats.totalPending} mục chờ</span>
+                ) : (
+                  <span className="flex items-center gap-1 text-emerald-700">
+                    <Check className="w-3.5 h-3.5" /> Chuẩn khớp
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* CENTER: 2 PROMINENT HIGH-END MASTER ACTION BUTTONS */}
+          <div className="space-y-3.5 pt-1">
+            
+            {/* BUTTON 1: ĐẨY DỮ LIỆU LÊN GOOGLE SHEETS (MASTER) */}
+            <button
+              type="button"
+              onClick={handlePushAllToGoogleSheets}
+              disabled={isSyncing}
+              className="w-full p-5 rounded-2xl bg-gradient-to-r from-[#008874] to-emerald-700 hover:from-[#007362] hover:to-emerald-800 text-white shadow-lg hover:shadow-xl transition-all transform active:scale-[0.99] flex items-center justify-between text-left group cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border border-emerald-500/30"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center text-white shrink-0 shadow-inner group-hover:scale-105 transition-transform">
+                  {isSyncing && syncAction === 'push' ? (
+                    <RefreshCw className="w-6 h-6 animate-spin text-emerald-200" />
+                  ) : (
+                    <UploadCloud className="w-6 h-6 text-emerald-100" />
+                  )}
+                </div>
+                <div>
+                  <div className="text-sm font-black tracking-tight text-white flex items-center gap-1.5">
+                    <span>ĐẨY DỮ LIỆU LÊN GOOGLE SHEETS (MASTER)</span>
+                    <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-bold">2 Chiều</span>
                   </div>
-                  <div className="text-xl font-extrabold text-amber-900 mt-1">
-                    {pendingStats.totalPending > 0 ? (
-                      <span className="text-amber-700">{pendingStats.totalPending} mục</span>
-                    ) : (
-                      <span className="text-emerald-700 text-sm font-bold flex items-center justify-center gap-1 mt-1">
-                        <Check className="w-4 h-4" /> Đã đồng bộ
-                      </span>
-                    )}
+                  <div className="text-xs text-emerald-100/90 font-medium mt-0.5">
+                    Đồng bộ ngay toàn bộ Đơn Hàng & Khách Hàng mới từ App/Firebase lên Sheet 24/7
                   </div>
                 </div>
               </div>
 
-              {/* Master Sync Action Cards */}
-              <div className="space-y-3">
-                {/* 1. ALL CUSTOMER SWEEP BUTTON */}
-                <div className="p-4 rounded-2xl bg-teal-50 border-2 border-teal-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="text-xs font-bold text-teal-950 flex items-center gap-1.5">
-                      <UserCheck className="w-4 h-4 text-teal-700" />
-                      Rà Soát & Đồng Bộ Toàn Bộ Khách Hàng (App ➔ Firebase ➔ Google Sheet)
+              <div className="hidden sm:flex w-8 h-8 rounded-xl bg-white/10 items-center justify-center text-white group-hover:translate-x-0.5 transition-transform shrink-0 ml-2">
+                <UploadCloud className="w-4 h-4" />
+              </div>
+            </button>
+
+            {/* BUTTON 2: KHÔI PHỤC VỀ APP & FIREBASE */}
+            <button
+              type="button"
+              onClick={handleRestoreFromGoogleSheets}
+              disabled={isSyncing}
+              className="w-full p-5 rounded-2xl bg-gradient-to-r from-amber-600 via-amber-700 to-orange-700 hover:from-amber-700 hover:to-orange-800 text-white shadow-lg hover:shadow-xl transition-all transform active:scale-[0.99] flex items-center justify-between text-left group cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border border-amber-500/30"
+            >
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 rounded-2xl bg-white/20 backdrop-blur-xs flex items-center justify-center text-white shrink-0 shadow-inner group-hover:scale-105 transition-transform">
+                  {isSyncing && syncAction === 'restore' ? (
+                    <RefreshCw className="w-6 h-6 animate-spin text-amber-200" />
+                  ) : (
+                    <DownloadCloud className="w-6 h-6 text-amber-100" />
+                  )}
+                </div>
+                <div>
+                  <div className="text-sm font-black tracking-tight text-white flex items-center gap-1.5">
+                    <span>KHÔI PHỤC VỀ APP & FIREBASE</span>
+                    <span className="px-2 py-0.5 rounded-full bg-white/20 text-[10px] font-bold">Khôi Phục Gốc</span>
+                  </div>
+                  <div className="text-xs text-amber-100/90 font-medium mt-0.5">
+                    Kéo dữ liệu chuẩn từ Google Sheet về ghi đè, bù đắp an toàn cho Firebase & Bộ nhớ máy
+                  </div>
+                </div>
+              </div>
+
+              <div className="hidden sm:flex w-8 h-8 rounded-xl bg-white/10 items-center justify-center text-white group-hover:translate-x-0.5 transition-transform shrink-0 ml-2">
+                <Database className="w-4 h-4" />
+              </div>
+            </button>
+
+          </div>
+
+          {/* Quick Active Sheet Link Ribbon */}
+          {sheetUrl && (
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2 truncate pr-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span className="font-semibold text-slate-700 truncate">Bảng tính Google Sheets đang kết nối</span>
+              </div>
+              <a
+                href={sheetUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold transition-all shrink-0 shadow-xs cursor-pointer"
+              >
+                <span>Mở Sheet</span>
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          )}
+
+          {/* Collapsible / Compact Webhook & Advanced Settings at the Bottom */}
+          <div className="border border-slate-200 rounded-2xl overflow-hidden bg-slate-50/50">
+            <button
+              type="button"
+              onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+              className="w-full px-4 py-3 flex items-center justify-between text-xs font-bold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <Settings2 className="w-4 h-4 text-slate-500" />
+                <span>Cấu Hình Webhook & Tự Động Hóa Chạy Ngầm</span>
+              </div>
+              <div className="flex items-center gap-1 text-slate-400">
+                {showAdvancedSettings ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+              </div>
+            </button>
+
+            {showAdvancedSettings && (
+              <div className="p-4 pt-1 space-y-3.5 border-t border-slate-200/70 bg-white animate-fade-in text-xs">
+                
+                {/* Auto Sync Toggle */}
+                <div className="flex items-center justify-between py-1">
+                  <div>
+                    <div className="font-bold text-slate-800 flex items-center gap-1.5">
+                      <Zap className="w-3.5 h-3.5 text-amber-500" />
+                      Tự Động Đồng Bộ Ngầm (Auto-Sync 24/7)
                     </div>
-                    <div className="text-[11px] text-teal-800">
-                      Quét toàn bộ tài khoản hiện tại, bảo đảm nạp vào Firestore và đẩy lên Sheet (kèm STT 1-1000 & Dropdown Tình Trạng)
+                    <div className="text-[11px] text-slate-500">
+                      Tự động rà soát & đẩy Đơn Hàng + Khách Hàng mới lên Sheet mỗi 60 giây
                     </div>
                   </div>
                   <button
                     type="button"
-                    onClick={handleSyncAllCustomersNow}
-                    disabled={isSyncing}
-                    className="shrink-0 px-4 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-600 text-white text-xs font-bold shadow-md cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                    onClick={handleToggleAutoSync}
+                    className={`w-12 h-6.5 rounded-full transition-colors relative cursor-pointer ${
+                      autoSync ? 'bg-[#008874]' : 'bg-slate-300'
+                    }`}
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncing && syncType === 'allCustomers' ? 'animate-spin' : ''}`} />
-                    <span>{isSyncing && syncType === 'allCustomers' ? 'Đang rà soát...' : '🔄 Đồng Bộ Tất Cả Khách Hàng'}</span>
+                    <div
+                      className={`w-5 h-5 rounded-full bg-white shadow-md transform transition-transform absolute top-0.5 ${
+                        autoSync ? 'left-6.5' : 'left-0.5'
+                      }`}
+                    />
                   </button>
                 </div>
 
-                {/* 2. TWO WAY COMPREHENSIVE SYNC & MASTER RECOVERY */}
-                <div className="p-4 rounded-2xl bg-gradient-to-br from-emerald-50 to-teal-50 border-2 border-emerald-300 space-y-3">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <div className="w-7 h-7 rounded-lg bg-emerald-600 text-white flex items-center justify-center">
-                        <ArrowLeftRight className="w-4 h-4" />
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-emerald-950">
-                          Đồng Bộ 2 Chiều Toàn Diện (Google Sheet làm Trung Tâm Master)
-                        </div>
-                        <div className="text-[11px] text-emerald-700">
-                          Đẩy đơn/khách mới lên Sheet VÀ quét dữ liệu từ Sheet khôi phục về Firebase
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
+                {/* Webhook URL Input */}
+                <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                  <label className="block font-bold text-slate-700 text-[11px]">
+                    URL Webhook Google Apps Script:
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={webhookUrl}
+                      onChange={(e) => setWebhookUrl(e.target.value)}
+                      placeholder="https://script.google.com/macros/s/.../exec"
+                      className="flex-1 px-3 py-2 rounded-xl border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-[#008874]"
+                    />
                     <button
                       type="button"
-                      onClick={handleFullTwoWaySync}
-                      disabled={isSyncing}
-                      className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-[#008874] hover:bg-[#007052] text-white text-xs font-bold shadow-md transition-all cursor-pointer disabled:opacity-50"
+                      onClick={handleSaveWebhook}
+                      className="px-3 py-2 rounded-xl bg-[#008874] hover:bg-[#007052] text-white text-xs font-bold transition-all cursor-pointer shrink-0"
                     >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncing && syncType === 'all' ? 'animate-spin' : ''}`} />
-                      <span>{isSyncing && syncType === 'all' ? 'Đang thực thi đồng bộ...' : '⚡ Kích Hoạt Đồng Bộ 2 Chiều Ngay'}</span>
+                      {savedWebhookSuccess ? 'Đã Lưu!' : 'Lưu'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTestWebhook}
+                      disabled={isSyncing}
+                      className="px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer shrink-0 flex items-center gap-1"
+                    >
+                      <Send className="w-3 h-3" />
+                      <span>Test</span>
                     </button>
                   </div>
                 </div>
 
-                {/* 3. DEDICATED MASTER RECOVERY CARD */}
-                <div className="p-4 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-300 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-                  <div className="space-y-1">
-                    <div className="text-xs font-bold text-amber-950 flex items-center gap-1.5">
-                      <Database className="w-4 h-4 text-amber-700" />
-                      <span>Khôi Phục Dữ Liệu Từ Google Sheet Vào Firebase</span>
-                      <span className="px-2 py-0.5 rounded-full bg-amber-200 text-amber-900 text-[10px] font-bold">Chống Mất Quota</span>
-                    </div>
-                    <div className="text-[11px] text-amber-800">
-                      Khi Firebase có Quota trở lại vào ngày hôm sau, bấm nút này để hệ thống đọc toàn bộ dữ liệu từ Google Sheet (qua Webhook GET/API) và tự động ghi bù tất cả đơn hàng & tài khoản khách hàng bị thiếu vào Firebase Firestore.
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleRestoreFromSheetToFirebase}
-                    disabled={isSyncing}
-                    className="shrink-0 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold shadow-md cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    <Database className={`w-3.5 h-3.5 ${isSyncing && syncType === 'restore' ? 'animate-bounce' : ''}`} />
-                    <span>{isSyncing && syncType === 'restore' ? 'Đang khôi phục bù...' : '📥 Khôi Phục Từ Google Sheet'}</span>
-                  </button>
-                </div>
-
-                {/* Sub Action Sync Buttons */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                  <button
-                    type="button"
-                    onClick={handleSyncAllCustomersNow}
-                    disabled={isSyncing}
-                    className="p-3 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left flex items-center justify-between cursor-pointer transition-all disabled:opacity-50"
-                  >
-                    <div className="flex items-center gap-2">
-                      <Users className="w-4 h-4 text-teal-600" />
-                      <div>
-                        <div className="text-xs font-bold text-slate-800">Đẩy Khách Hàng Lên Sheet</div>
-                        <div className="text-[10px] text-slate-500">Kèm STT 1-1000 & Dropdown Tình Trạng</div>
-                      </div>
-                    </div>
-                    <ArrowRight className="w-4 h-4 text-slate-400" />
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleSyncOrdersOnly}
-                    disabled={isSyncing}
-                    className="p-3 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-left flex items-center justify-between cursor-pointer transition-all disabled:opacity-50"
-                  >
-                    <div className="flex items-center gap-2">
-                      <ShoppingBag className="w-4 h-4 text-emerald-600" />
-                      <div>
-                        <div className="text-xs font-bold text-slate-800">Đẩy Đơn Hàng Lên Sheet</div>
-                        <div className="text-[10px] text-slate-500">Đồng bộ {orders.length} đơn hàng</div>
-                      </div>
-                    </div>
-                    <ArrowRight className="w-4 h-4 text-slate-400" />
-                  </button>
-                </div>
-              </div>
-
-              {/* Connected Google Sheet Status */}
-              {sheetUrl ? (
-                <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                      Bảng Tính Google Sheets Đang Hoạt Động
-                    </span>
-                    <a
-                      href={sheetUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center gap-1 px-3 py-1 rounded-lg bg-[#008874] text-white text-[11px] font-bold hover:bg-[#007052] transition-colors"
-                    >
-                      <span>Mở Trang Tính</span>
-                      <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </div>
-                  <div className="text-[11px] text-slate-500 truncate">
-                    URL: {sheetUrl}
-                  </div>
-                </div>
-              ) : (
-                <div className="p-4 rounded-2xl bg-emerald-50/50 border border-emerald-200 flex flex-col sm:flex-row items-center justify-between gap-3">
-                  <div>
-                    <div className="text-xs font-bold text-emerald-950">Chưa tạo Sheet qua tài khoản Google?</div>
-                    <div className="text-[11px] text-emerald-700 mt-0.5">Bấm để tự động tạo file Google Sheet đầy đủ cột ĐƠN HÀNG & KHÁCH HÀNG</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={handleGoogleLoginAndCreate}
-                    disabled={isConnecting}
-                    className="shrink-0 px-4 py-2 rounded-xl bg-[#008874] hover:bg-[#007052] text-white text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
-                  >
-                    {isConnecting ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                    <span>Kết Nối Google & Tạo Sheet</span>
-                  </button>
-                </div>
-              )}
-            </>
-          )}
-
-          {activeTab === 'webhook' && (
-            <div className="space-y-4">
-              <div className="p-4 bg-amber-50/70 border border-amber-200 rounded-2xl text-xs text-amber-900 space-y-1">
-                <div className="font-bold flex items-center gap-1.5 text-amber-950">
-                  <Zap className="w-4 h-4 text-amber-600" />
-                  Vì sao nên dùng Google Apps Script Webhook?
-                </div>
-                <p className="text-[11px] leading-relaxed text-amber-800">
-                  Webhook chạy ngầm dưới quyền Admin, giúp <strong>100% đơn hàng và khách hàng mới được ghi thẳng vào Google Sheet ngay lập tức 24/7</strong> từ bất kỳ điện thoại hay thiết bị nào của khách hàng mà không cần khách đăng nhập Google.
-                </p>
-              </div>
-
-              {/* Webhook URL Input */}
-              <div className="space-y-2">
-                <label className="block text-xs font-bold text-slate-800">
-                  URL Ứng Dụng Web (Google Apps Script Web App URL):
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={webhookUrl}
-                    onChange={(e) => setWebhookUrl(e.target.value)}
-                    placeholder="https://script.google.com/macros/s/.../exec"
-                    className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs focus:outline-none focus:ring-2 focus:ring-[#008874]"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleSaveWebhook}
-                    className="px-4 py-2.5 rounded-xl bg-[#008874] hover:bg-[#007052] text-white text-xs font-bold transition-all cursor-pointer"
-                  >
-                    {savedWebhookSuccess ? 'Đã Lưu!' : 'Lưu URL'}
-                  </button>
-                </div>
-                <p className="text-[10px] text-slate-500">
-                  URL này tự động chia sẻ đến toàn bộ thiết bị khách truy cập để gửi đơn và đăng ký tài khoản tức thì.
-                </p>
-              </div>
-
-              {/* Test Webhook Button */}
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-bold text-slate-800">Kiểm tra kết nối Webhook ngay</div>
-                  <div className="text-[10px] text-slate-500">Gửi thử 1 Khách hàng test & 1 Đơn hàng test lên Google Sheet</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={handleTestWebhook}
-                  disabled={isSyncing}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-bold shadow-sm cursor-pointer disabled:opacity-50"
-                >
-                  {isSyncing && syncType === 'test' ? (
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <Send className="w-3.5 h-3.5" />
-                  )}
-                  <span>{isSyncing && syncType === 'test' ? 'Đang gửi...' : '🧪 Gửi Dữ Liệu Test'}</span>
-                </button>
-              </div>
-
-              {/* Copy Code Box */}
-              <div className="space-y-2 pt-2 border-t border-slate-200">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                    <Code2 className="w-4 h-4 text-[#008874]" />
-                    Mã Google Apps Script Mới Nhất (Tự tạo STT & Dropdown Tình Trạng):
-                  </span>
+                {/* Apps Script Code Copy Button */}
+                <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                  <span className="text-[11px] text-slate-500">Mã Google Apps Script (Tự tạo STT & Dropdown):</span>
                   <button
                     type="button"
                     onClick={handleCopyScript}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-100 hover:bg-emerald-200 text-emerald-900 text-xs font-bold transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[11px] font-bold transition-colors cursor-pointer border border-emerald-200"
                   >
-                    {copiedScript ? <CheckCheck className="w-3.5 h-3.5 text-emerald-700" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedScript ? 'Đã Sao Chép Code!' : 'Sao Chép Toàn Bộ Mã'}</span>
+                    {copiedScript ? <CheckCheck className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedScript ? 'Đã Sao Chép Code!' : 'Sao Chép Mã Script'}</span>
                   </button>
                 </div>
-                <div className="relative">
-                  <pre className="p-3 bg-slate-900 text-emerald-400 text-[11px] rounded-xl font-mono max-h-48 overflow-y-auto leading-relaxed border border-slate-800">
-                    {APPS_SCRIPT_TEMPLATE}
-                  </pre>
-                </div>
-              </div>
-            </div>
-          )}
 
-          {activeTab === 'guide' && (
-            <div className="space-y-3.5 text-xs text-slate-600">
-              <div className="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200 space-y-2">
-                <div className="font-bold text-emerald-950 flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 text-emerald-700" />
-                  10 Cột Chuẩn Trong Trang "KHÁCH HÀNG":
-                </div>
-                <div className="grid grid-cols-2 gap-1.5 text-[11px] text-emerald-900 pl-1">
-                  <div>1. <strong>STT</strong> (Số thứ tự 1-1000)</div>
-                  <div>2. <strong>Mã Khách Hàng</strong></div>
-                  <div>3. <strong>Họ Và Tên</strong></div>
-                  <div>4. <strong>Số Điện Thoại</strong></div>
-                  <div>5. <strong>Email</strong></div>
-                  <div>6. <strong>Địa Chỉ</strong></div>
-                  <div>7. <strong>Tỉnh / Thành</strong></div>
-                  <div>8. <strong>Ngày Đăng Ký</strong></div>
-                  <div>9. <strong>Voucher Freeship</strong></div>
-                  <div>10. <strong>Tình Trạng</strong> (Thanh sổ xuống: Hoạt động, Bị khóa, Đã xóa)</div>
-                </div>
               </div>
+            )}
+          </div>
 
-              <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
-                <div className="font-bold text-slate-800 flex items-center gap-1.5">
-                  <HelpCircle className="w-4 h-4 text-slate-600" />
-                  Cập nhật mã Apps Script mới:
-                </div>
-                <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600 pl-1 leading-relaxed">
-                  <li>Vào Google Sheet &gt; <em>Tiện ích mở rộng &gt; Apps Script</em>.</li>
-                  <li>Xóa code cũ, dán toàn bộ mã mới từ tab <strong>Webhook Tự Động 24/7</strong>.</li>
-                  <li>Bấm <strong>Triển khai (Deploy)</strong> &gt; <strong>Quản lý các bản triển khai (Manage deployments)</strong> &gt; Bấm biểu tượng <strong>Bút Chỉnh Sửa</strong> &gt; Mục Phiên bản chọn <strong>"Phiên bản mới" (New version)</strong> &gt; Bấm <strong>Triển khai</strong>.</li>
-                  <li>Bấm nút <strong>"🔄 Đồng Bộ Tất Cả Khách Hàng"</strong> để nạp toàn bộ danh sách khách hàng lên Sheet!</li>
-                </ol>
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* Footer */}
-        <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+        {/* Modal Footer */}
+        <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200/80 flex items-center justify-between">
           <button
             type="button"
             onClick={onClose}
@@ -849,27 +555,12 @@ Toàn bộ hệ thống website và trang quản trị đã được đồng b�
             Đóng
           </button>
 
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleSyncAllCustomersNow}
-              disabled={isSyncing}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-600 text-white text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50"
-            >
-              <UserCheck className={`w-3.5 h-3.5 ${isSyncing && syncType === 'allCustomers' ? 'animate-spin' : ''}`} />
-              <span>Đồng Bộ Khách Hàng</span>
-            </button>
-            <button
-              type="button"
-              onClick={handleFullTwoWaySync}
-              disabled={isSyncing}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#008874] hover:bg-[#007052] text-white text-xs font-bold shadow-sm transition-all cursor-pointer disabled:opacity-50"
-            >
-              <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-              <span>{isSyncing ? 'Đang đồng bộ...' : 'Đồng Bộ 2 Chiều'}</span>
-            </button>
+          <div className="text-[11px] text-slate-500 font-medium flex items-center gap-1">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Bảo toàn 100% dữ liệu 3 lớp (Sheet ➔ Telegram ➔ Firebase)</span>
           </div>
         </div>
+
       </div>
     </div>
   );
