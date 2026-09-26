@@ -538,6 +538,18 @@ function doGet(e) {
       for (var j = 1; j < ordData.length; j++) {
         var oRow = ordData[j];
         if (oRow[0]) {
+          var rawSt = String(oRow[11] || '').trim();
+          var parsedSt = 'pending';
+          if (rawSt.indexOf('Đã hủy') >= 0 || rawSt.indexOf('cancelled') >= 0) {
+            parsedSt = 'cancelled';
+          } else if (rawSt.indexOf('Đã giao') >= 0 || rawSt.indexOf('delivered') >= 0) {
+            parsedSt = 'delivered';
+          } else if (rawSt.indexOf('Đang giao') >= 0 || rawSt.indexOf('shipping') >= 0) {
+            parsedSt = 'shipping';
+          } else if (rawSt.indexOf('Đang xử lý') >= 0 || rawSt.indexOf('Chuẩn bị') >= 0 || rawSt.indexOf('processing') >= 0) {
+            parsedSt = 'processing';
+          }
+
           orders.push({
             id: String(oRow[0]),
             createdAt: String(oRow[1] || ''),
@@ -549,7 +561,7 @@ function doGet(e) {
             total: Number(oRow[8]) || 0,
             paymentMethod: String(oRow[9] || '').includes('VietQR') ? 'vietqr' : 'cod',
             couponCode: String(oRow[10] || ''),
-            status: String(oRow[11] || '').includes('Đã giao') ? 'delivered' : 'pending',
+            status: parsedSt,
             notes: String(oRow[12] || '')
           });
         }
@@ -1652,59 +1664,16 @@ export const reconcileAndSyncAll = async (
       }
     }
 
-    // 3. RESTORE FROM GOOGLE SHEETS TO FIRESTORE (Google Sheet is master hub)
-    const sheetCustomers = await fetchCustomersFromGoogleSheet(activeToken || undefined);
-    const sheetOrders = await fetchOrdersFromGoogleSheet(activeToken || undefined);
-
-    for (const sc of sheetCustomers) {
-      const cleanPhone = normalizeVietnamesePhone(sc.phone);
-      if (!cleanPhone || cleanPhone.length !== 10) continue;
-      try {
-        safeWithTimeout(
-          setDoc(doc(db, 'customers', cleanPhone), sanitizeFirestoreData({
-            ...sc,
-            id: `CUS-${cleanPhone}`,
-            phone: cleanPhone,
-            registeredAt: sc.createdAt,
-            lastLoginAt: sc.createdAt,
-          }), { merge: true }),
-          null,
-          1000
-        ).then(() => {
-          customersRestoredToFirestore++;
-        }).catch(() => {});
-      } catch {
-        queuePendingFirestoreCustomer(sc);
-      }
-    }
-
-    for (const so of sheetOrders) {
-      if (!so.id) continue;
-      const cleanPhone = normalizeVietnamesePhone(so.customerPhone || (so as any).phone);
-      try {
-        safeWithTimeout(
-          setDoc(doc(db, 'orders', so.id), sanitizeFirestoreData({
-            ...so,
-            customerPhone: cleanPhone,
-          }), { merge: true }),
-          null,
-          1000
-        ).then(() => {
-          ordersRestoredToFirestore++;
-        }).catch(() => {});
-      } catch {
-        if (so.id && so.createdAt && so.customerName && cleanPhone) {
-          queuePendingFirestoreOrder(so as Order);
-        }
-      }
-    }
+    // 3. APPS SCRIPT TEMPLATE FIX: Full status mapping
+    // Note: Reconcile only pushes outwards to Google Sheets.
+    // RESTORING from Google Sheet to Firestore is ONLY executed when explicitly requested by Admin via restoreAllFromGoogleSheetsToFirestore!
 
     return {
       success: true,
       customersSyncedToSheet,
       ordersSyncedToSheet,
-      customersRestoredToFirestore: sheetCustomers.length,
-      ordersRestoredToFirestore: sheetOrders.length,
+      customersRestoredToFirestore: 0,
+      ordersRestoredToFirestore: 0,
     };
   } catch (err: any) {
     return {

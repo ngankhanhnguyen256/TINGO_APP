@@ -300,26 +300,12 @@ export const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({
 
       // 4. Background non-blocking network sync (Firestore, Google Sheets, Telegram)
       const syncTask = async () => {
-        // 4a. Update in Firestore with safe timeout
+        // 4a. Update in Firestore with reliable setDoc merge
         try {
-          const payload = sanitizeFirestoreData({
-            status: 'cancelled',
-            cancelledAt: isoString,
-            cancelledBy: 'customer',
-            cancelReason: finalReason,
-            timeline: updatedTimeline,
-          });
-          const updatePromise = updateDoc(doc(db, 'orders', target.id), payload).catch(async () => {
-            await setDoc(doc(db, 'orders', target.id), sanitizeFirestoreData(updatedOrder), {
-              merge: true,
-            });
-          });
-          await Promise.race([
-            updatePromise,
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Firestore timeout')), 2500)),
-          ]).catch(() => {});
+          const payload = sanitizeFirestoreData(updatedOrder);
+          await setDoc(doc(db, 'orders', target.id), payload, { merge: true }).catch(() => {});
         } catch (err) {
-          console.warn('Firestore cancel order update warning:', err);
+          console.warn('Firestore cancel order write warning:', err);
         }
 
         // 4b. Sync to Google Sheets Webhook

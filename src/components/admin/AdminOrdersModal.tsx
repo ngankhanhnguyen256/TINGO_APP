@@ -293,15 +293,36 @@ export const AdminOrdersModal: React.FC<AdminOrdersModalProps> = ({
         // ignore
       }
 
-      // 2. Override/enrich with Firestore data
+      // 1b. Retrieve local blocked identifiers cache
+      let localBlockedList: string[] = [];
+      try {
+        const rawBlocked = localStorage.getItem(BLOCKED_CACHE_KEY);
+        if (rawBlocked) {
+          const parsedB = JSON.parse(rawBlocked);
+          if (Array.isArray(parsedB)) {
+            localBlockedList = parsedB.map((p: string) => normalizeVietnamesePhone(p) || p.toLowerCase().trim());
+          }
+        }
+      } catch {
+        // ignore
+      }
+
+      // 2. Override/enrich with Firestore data (Protecting blocked status)
       firebaseList.forEach((fc) => {
         const clean = normalizeVietnamesePhone(fc.phone || fc.id);
         if (clean && clean.length === 10) {
+          const isExplicitlyBlocked = Boolean(
+            fc.isBlocked === true ||
+            localBlockedList.includes(clean) ||
+            (fc.email && localBlockedList.includes(fc.email.toLowerCase().trim()))
+          );
           map[clean] = {
             ...(map[clean] || {}),
             ...fc,
             id: `CUS-${clean}`,
             phone: clean,
+            isBlocked: isExplicitlyBlocked,
+            blockedAt: isExplicitlyBlocked ? (fc.blockedAt || map[clean]?.blockedAt || new Date().toISOString()) : undefined,
           };
         }
       });

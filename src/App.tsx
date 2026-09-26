@@ -194,10 +194,20 @@ function MainApp() {
           incomingMap.forEach((ord, id) => {
             const existing = mergedMap.get(id);
             if (existing) {
-              // Merge fields: preserve local extra info while accepting cloud status updates
+              // CRITICAL: If either existing (local) or incoming (cloud) has cancelled status, NEVER regress back to pending!
+              const isCancelled = existing.status === 'cancelled' || ord.status === 'cancelled';
+              const finalStatus = isCancelled ? 'cancelled' : (ord.status || existing.status);
+
               mergedMap.set(id, {
                 ...existing,
                 ...ord,
+                status: finalStatus,
+                cancelledAt: isCancelled ? (existing.cancelledAt || ord.cancelledAt || new Date().toISOString()) : (ord.cancelledAt || existing.cancelledAt),
+                cancelledBy: isCancelled ? (existing.cancelledBy || ord.cancelledBy || 'customer') : (ord.cancelledBy || existing.cancelledBy),
+                cancelReason: isCancelled ? (existing.cancelReason || ord.cancelReason) : (ord.cancelReason || existing.cancelReason),
+                timeline: (isCancelled && existing.status === 'cancelled' && (existing.timeline?.length || 0) >= (ord.timeline?.length || 0))
+                  ? existing.timeline
+                  : (ord.timeline || existing.timeline),
               });
             } else {
               mergedMap.set(id, ord);
