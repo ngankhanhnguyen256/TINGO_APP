@@ -26,6 +26,9 @@ import { VerticalVideoItem } from '../../types';
 import { saveVideoBlob } from '../../lib/storageHelper';
 import { uploadVideoToCloud } from '../../lib/videoCloudStorage';
 import { parseVideoUrl, fetchTikTokMetadata } from '../../utils/videoUrlHelper';
+import { doc, setDoc, deleteDoc, collection, getDocs } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
+import { sanitizeFirestoreData } from '../../utils/sanitizeFirestore';
 
 interface VerticalVideoEditorModalProps {
   isOpen: boolean;
@@ -67,8 +70,6 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
     linkedProductPrice: 0,
   });
 
-  if (!isOpen) return null;
-
   const sectionData = config.verticalVideos || {
     badge: 'VIDEO TRẢI NGHIỆM THỰC TẾ (9:16)',
     titleLine1: 'Khách Hàng & Chuyên Gia',
@@ -76,6 +77,36 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
     subtitle: 'Xem video review thực tế 9:16 từ cộng đồng người dùng TINGO.',
     items: [],
   };
+
+  // Check & Auto-seed default videos to Firestore collection 'videos' if database is empty
+  useEffect(() => {
+    if (!isOpen) return;
+    const checkAndSeedVideos = async () => {
+      try {
+        const snap = await getDocs(collection(db, 'videos'));
+        if (snap.empty && sectionData.items && sectionData.items.length > 0) {
+          // Seed existing videos to Firestore collection
+          for (let i = 0; i < sectionData.items.length; i++) {
+            const it = sectionData.items[i];
+            await setDoc(
+              doc(db, 'videos', it.id),
+              sanitizeFirestoreData({
+                ...it,
+                order: i,
+                updatedAt: new Date().toISOString(),
+              }),
+              { merge: true }
+            );
+          }
+        }
+      } catch (err) {
+        console.warn('Firestore videos check/seed note:', err);
+      }
+    };
+    checkAndSeedVideos();
+  }, [isOpen, sectionData.items]);
+
+  if (!isOpen) return null;
 
   const parsedVideo = parseVideoUrl(formData.videoUrl);
 
@@ -148,7 +179,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
     }
   };
 
-  const handleSaveForm = (e: React.FormEvent) => {
+  const handleSaveForm = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.videoUrl && !formData.title) return;
 
@@ -157,32 +188,65 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
       ? `indexeddb://${itemId}`
       : formData.videoUrl || `indexeddb://${itemId}`;
 
+    const videoPayload: VerticalVideoItem & { order?: number; updatedAt?: string } = {
+      id: itemId,
+      title: formData.title || 'Trải nghiệm sản phẩm TINGO',
+      author: formData.author || 'Khách hàng TINGO',
+      authorAvatar: formData.authorAvatar || '',
+      videoUrl: cleanVideoUrl,
+      thumbnailUrl: formData.thumbnailUrl || '',
+      viewsCount: formData.viewsCount || '10.5K',
+      likesCount: formData.likesCount || '1.1K',
+      badge: formData.badge || 'Trải Nghiệm',
+      linkedProductId: formData.linkedProductId,
+      linkedProductName: formData.linkedProductName,
+      linkedProductPrice: formData.linkedProductPrice,
+      order: editingItemId ? (sectionData.items.findIndex(i => i.id === editingItemId) ?? 0) : sectionData.items.length,
+      updatedAt: new Date().toISOString(),
+    };
+
+    // 1. Update Visual Editor Context
     if (isAddingNew) {
-      const newItem: VerticalVideoItem = {
-        id: itemId,
-        title: formData.title || 'Trải nghiệm sản phẩm TINGO',
-        author: formData.author || 'Khách hàng TINGO',
-        authorAvatar: formData.authorAvatar || '',
-        videoUrl: cleanVideoUrl,
-        thumbnailUrl: formData.thumbnailUrl || '',
-        viewsCount: formData.viewsCount || '10.5K',
-        likesCount: formData.likesCount || '1.1K',
-        badge: formData.badge || 'Trải Nghiệm',
-        linkedProductId: formData.linkedProductId,
-        linkedProductName: formData.linkedProductName,
-        linkedProductPrice: formData.linkedProductPrice,
-      };
-      addVerticalVideoItem(newItem);
+      addVerticalVideoItem(videoPayload);
     } else if (editingItemId) {
-      updateVerticalVideoItem(editingItemId, {
-        ...formData,
-        id: itemId,
-        videoUrl: cleanVideoUrl,
-      });
+      updateVerticalVideoItem(editingItemId, videoPayload);
+    }
+
+    // 2. Direct Sync to Firestore collection 'videos' (Real-time trigger for all clients)
+    try {
+      await setDoc(doc(db, 'videos', itemId), sanitizeFirestoreData(videoPayload), { merge: true });
+    } catch (err) {
+      console.warn('Firestore direct video sync note:', err);
     }
 
     setEditingItemId(null);
     setIsAddingNew(false);
+  };
+
+  const handleDeleteVideo = async (itemId: string) => {
+    removeVerticalVideoItem(itemId);
+    try {
+      await deleteDoc(doc(db, 'videos', itemId));
+    } catch (err) {
+      console.warn('Firestore video delete note:', err);
+    }
+  };
+
+  const handleReorderVideo = async (itemId: string, direction: 'prev' | 'next') => {
+    reorderVerticalVideoItem(itemId, direction);
+    // Sync reorder index to Firestore
+    try {
+      const currIdx = sectionData.items.findIndex((i) => i.id === itemId);
+      if (currIdx < 0) return;
+      const targetIdx = direction === 'prev' ? currIdx - 1 : currIdx + 1;
+      if (targetIdx >= 0 && targetIdx < sectionData.items.length) {
+        const otherItem = sectionData.items[targetIdx];
+        await setDoc(doc(db, 'videos', itemId), { order: targetIdx }, { merge: true });
+        await setDoc(doc(db, 'videos', otherItem.id), { order: currIdx }, { merge: true });
+      }
+    } catch (err) {
+      console.warn('Firestore reorder video note:', err);
+    }
   };
 
   // Video File Upload Handler from Device
@@ -760,7 +824,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                           <div className="flex items-center gap-1">
                             <button
                               type="button"
-                              onClick={() => reorderVerticalVideoItem(item.id, 'prev')}
+                              onClick={() => handleReorderVideo(item.id, 'prev')}
                               disabled={idx === 0}
                               title="Di chuyển lên trước"
                               className="p-1 rounded-lg hover:bg-slate-100 disabled:opacity-30 text-slate-600 cursor-pointer"
@@ -769,7 +833,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                             </button>
                             <button
                               type="button"
-                              onClick={() => reorderVerticalVideoItem(item.id, 'next')}
+                              onClick={() => handleReorderVideo(item.id, 'next')}
                               disabled={idx === (sectionData.items?.length || 0) - 1}
                               title="Di chuyển xuống sau"
                               className="p-1 rounded-lg hover:bg-slate-100 disabled:opacity-30 text-slate-600 cursor-pointer"
@@ -788,7 +852,7 @@ export const VerticalVideoEditorModal: React.FC<VerticalVideoEditorModalProps> =
                             </button>
                             <button
                               type="button"
-                              onClick={() => removeVerticalVideoItem(item.id)}
+                              onClick={() => handleDeleteVideo(item.id)}
                               title="Xóa video này"
                               className="p-1.5 rounded-lg bg-slate-100 hover:bg-red-50 text-slate-700 hover:text-red-600 transition-colors cursor-pointer"
                             >
